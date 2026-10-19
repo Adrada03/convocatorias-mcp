@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from convocatorias_mcp.models import (
     Convocatoria,
@@ -28,7 +28,9 @@ from convocatorias_mcp.models import (
     PlazoOrigen,
     SearchFilters,
     Seccion,
+    Seguimiento,
     SourceHealth,
+    Watchlist,
     normalize_text,
 )
 from convocatorias_mcp.vocabulario import expandir_keywords
@@ -36,9 +38,12 @@ from convocatorias_mcp.vocabulario import expandir_keywords
 __all__ = [
     "ORDEN_CANONICO_SQL",
     "buscar",
+    "convocatorias_que_vencen",
     "fechas_registradas",
     "guardar_convocatorias",
     "guardar_texto",
+    "listar_por_estado",
+    "marcar_seguimiento",
     "obtener_convocatoria",
     "registrar_ingesta",
     "ultima_ingesta",
@@ -137,6 +142,14 @@ def guardar_texto(conn: sqlite3.Connection, convocatoria: Convocatoria) -> bool:
         UPDATE convocatorias
         SET texto_completo      = :texto,
             texto_descargado_at = :descargado,
+            -- El plazo sale del texto, así que se guarda en la misma pasada.
+            -- Solo si se ha determinado: un COALESCE aquí evita que un parseo
+            -- que no encontró fecha borre una que sí se conocía.
+            plazo_fin           = COALESCE(:plazo, plazo_fin),
+            plazo_origen        = CASE
+                WHEN :origen = 'desconocido' THEN plazo_origen
+                ELSE :origen
+            END,
             actualizado_at      = :ahora
         WHERE id = :id
         """,
@@ -144,10 +157,133 @@ def guardar_texto(conn: sqlite3.Connection, convocatoria: Convocatoria) -> bool:
             "id": convocatoria.id,
             "texto": convocatoria.texto_completo,
             "descargado": descargado.isoformat(),
+            "plazo": convocatoria.plazo_fin.isoformat() if convocatoria.plazo_fin else None,
+            "origen": convocatoria.plazo_origen.value,
             "ahora": datetime.now().astimezone().isoformat(),
         },
     )
     return cursor.rowcount > 0
+
+
+def marcar_seguimiento(conn: sqlite3.Connection, seguimiento: Seguimiento) -> bool:
+    """Guarda lo que el usuario ha hecho con una convocatoria.
+
+    Devuelve ``False`` si la convocatoria no está en el índice, en vez de crear
+    una fila huérfana: un id mal escrito debe notarse.
+    """
+    existe = conn.execute(
+        "SELECT 1 FROM convocatorias WHERE id = ?", (seguimiento.convocatoria_id,)
+    ).fetchone()
+    if existe is None:
+        return False
+
+    conn.execute(
+        """
+        INSERT INTO seguimiento (
+            convocatoria_id, estado, motivo, notas, fecha_solicitud, actualizado_at
+        ) VALUES (:id, :estado, :motivo, :notas, :fecha, :ahora)
+        ON CONFLICT (convocatoria_id) DO UPDATE SET
+            estado          = excluded.estado,
+            motivo          = excluded.motivo,
+            notas           = excluded.notas,
+            fecha_solicitud = excluded.fecha_solicitud,
+            actualizado_at  = excluded.actualizado_at
+        """,
+        {
+            "id": seguimiento.convocatoria_id,
+            "estado": seguimiento.estado.value,
+            "motivo": seguimiento.motivo,
+            "notas": seguimiento.notas,
+            "fecha": (
+                seguimiento.fecha_solicitud.isoformat() if seguimiento.fecha_solicitud else None
+            ),
+            "ahora": seguimiento.actualizado_at.isoformat(),
+        },
+    )
+    return True
+
+
+def listar_por_estado(
+    conn: sqlite3.Connection, estado: Estado
+) -> list[tuple[Convocatoria, Seguimiento]]:
+    """Convocatorias en un estado de seguimiento, con sus notas.
+
+    Ordenadas por lo más recientemente marcado: para un registro de solicitudes
+    es más útil que el orden de publicación.
+    """
+    filas = conn.execute(
+        f"""
+        SELECT {_CAMPOS}, s.motivo, s.notas, s.fecha_solicitud, s.actualizado_at
+        FROM convocatorias c
+        JOIN seguimiento s ON s.convocatoria_id = c.id
+        WHERE s.estado = ?
+        ORDER BY s.actualizado_at DESC, c.identificador ASC
+        """,
+        (estado.value,),
+    ).fetchall()
+
+    resultado = []
+    for fila in filas:
+        resultado.append(
+            (
+                _a_convocatoria(fila),
+                Seguimiento(
+                    convocatoria_id=fila["id"],
+                    estado=estado,
+                    motivo=fila["motivo"],
+                    notas=fila["notas"],
+                    fecha_solicitud=(
+                        date.fromisoformat(fila["fecha_solicitud"])
+                        if fila["fecha_solicitud"]
+                        else None
+                    ),
+                    actualizado_at=datetime.fromisoformat(fila["actualizado_at"]),
+                ),
+            )
+        )
+    return resultado
+
+
+def convocatorias_que_vencen(
+    conn: sqlite3.Connection,
+    *,
+    dias: int,
+    hoy: date,
+    incluir_descartadas: bool = False,
+    limite: int = 50,
+) -> list[Convocatoria]:
+    """Convocatorias con el plazo abierto que cierran dentro de ``dias``.
+
+    Solo aparecen las que tienen plazo determinado. Las de plazo desconocido
+    **no** se cuelan aquí: decir que algo vence sin saberlo sería inventarse una
+    fecha por omisión.
+    """
+    condiciones = [
+        "c.plazo_fin IS NOT NULL",
+        "c.plazo_fin >= :hoy",
+        "c.plazo_fin <= :limite_fecha",
+    ]
+    params: dict[str, object] = {
+        "hoy": hoy.isoformat(),
+        "limite_fecha": (hoy + timedelta(days=dias)).isoformat(),
+        "limite": limite,
+    }
+    if not incluir_descartadas:
+        condiciones.append("COALESCE(s.estado, 'nueva') != :descartada")
+        params["descartada"] = Estado.DESCARTADA.value
+
+    filas = conn.execute(
+        f"""
+        SELECT {_CAMPOS}
+        FROM convocatorias c
+        LEFT JOIN seguimiento s ON s.convocatoria_id = c.id
+        WHERE {" AND ".join(condiciones)}
+        ORDER BY c.plazo_fin ASC, c.seccion ASC, c.identificador ASC
+        LIMIT :limite
+        """,
+        params,
+    ).fetchall()
+    return [_a_convocatoria(fila) for fila in filas]
 
 
 def registrar_ingesta(conn: sqlite3.Connection, salud: SourceHealth) -> None:
@@ -232,6 +368,7 @@ def buscar(
     filtros: SearchFilters,
     *,
     sinonimos: Mapping[str, tuple[str, ...]] | None = None,
+    watchlist: Watchlist | None = None,
 ) -> list[Convocatoria]:
     """Filtro de nivel 1: barato, determinista y sin llamar a ningún modelo.
 
@@ -284,13 +421,25 @@ def buscar(
         condiciones.append("COALESCE(s.estado, 'nueva') != ?")
         params.append(Estado.DESCARTADA.value)
 
-    join_watchlist = ""
-    if filtros.watchlist:
-        # INNER JOIN: solo las que ha hecho coincidir esa watchlist. Hasta que
-        # exista el ranking, esta tabla está vacía y el filtro no devuelve nada.
-        join_watchlist = "JOIN convocatoria_watchlists w ON w.convocatoria_id = c.id"
-        condiciones.append("w.watchlist = ?")
-        params.append(filtros.watchlist)
+    if watchlist is not None:
+        # Una watchlist es un conjunto de criterios, así que se traduce al
+        # WHERE en vez de consultar la tabla de coincidencias: así el filtro
+        # funciona en cuanto el usuario edita su fichero, sin reingerir.
+        if watchlist.secciones:
+            marcas = ", ".join("?" for _ in watchlist.secciones)
+            condiciones.append(f"c.seccion IN ({marcas})")
+            params.extend(seccion.value for seccion in watchlist.secciones)
+        # Las keywords de una watchlist son temas de interés, así que basta con
+        # que aparezca UNA (OR). Es lo contrario que en una búsqueda explícita,
+        # donde el usuario las exige todas, y es lo que hace el scoring: un
+        # perfil con cuatro intereses no pide convocatorias que los mezclen.
+        grupos = expandir_keywords(watchlist.keywords, sinonimos)
+        if grupos:
+            alternativas = [variante for grupo in grupos for variante in grupo]
+            condiciones.append(
+                "(" + " OR ".join("c.titulo_normalizado LIKE ?" for _ in alternativas) + ")"
+            )
+            params.extend(f"%{variante}%" for variante in alternativas)
 
     where = f"WHERE {' AND '.join(condiciones)}" if condiciones else ""
     params.append(filtros.limite)
@@ -300,7 +449,6 @@ def buscar(
         SELECT {_CAMPOS}
         FROM convocatorias c
         LEFT JOIN seguimiento s ON s.convocatoria_id = c.id
-        {join_watchlist}
         {where}
         ORDER BY {ORDEN_CANONICO_SQL}
         LIMIT ?

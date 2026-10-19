@@ -31,6 +31,7 @@ from convocatorias_mcp.models import (
     SearchFilters,
     Seccion,
     SourceHealth,
+    Watchlist,
 )
 
 
@@ -295,10 +296,54 @@ def test_las_descartadas_se_omiten_por_defecto(conn, convocatoria_factory):
     assert len(buscar(conn, SearchFilters(include_descartadas=True))) == 1
 
 
-def test_filtrar_por_watchlist_sin_ranking_no_devuelve_nada(conn, convocatoria_factory):
-    # Hasta que exista el ranking la tabla de coincidencias esta vacia.
+def test_una_watchlist_filtra_por_sus_secciones(conn, convocatoria_factory):
+    guardar_convocatorias(
+        conn,
+        [
+            convocatoria_factory(identificador="BOE-A-2026-1", seccion=Seccion.II_B),
+            convocatoria_factory(identificador="BOE-A-2026-2", seccion=Seccion.V_A),
+        ],
+    )
+    watchlist = Watchlist(nombre="empleo", secciones=["II.B"])
+
+    resultados = buscar(conn, SearchFilters(), watchlist=watchlist)
+
+    assert [c.identificador for c in resultados] == ["BOE-A-2026-1"]
+
+
+def test_una_watchlist_filtra_por_sus_keywords(conn, convocatoria_factory):
+    guardar_convocatorias(
+        conn,
+        [
+            convocatoria_factory(identificador="BOE-A-2026-1", titulo="Beca de informática"),
+            convocatoria_factory(identificador="BOE-A-2026-2", titulo="Beca de historia"),
+        ],
+    )
+    watchlist = Watchlist(nombre="becas-tic", keywords=["informatica"])
+
+    resultados = buscar(conn, SearchFilters(), watchlist=watchlist)
+
+    assert [c.identificador for c in resultados] == ["BOE-A-2026-1"]
+
+
+def test_las_keywords_de_la_watchlist_tambien_usan_sinonimos(conn, convocatoria_factory):
+    guardar_convocatorias(
+        conn,
+        [
+            convocatoria_factory(
+                identificador="BOE-A-2026-1",
+                titulo="Resolución por la que se convoca proceso selectivo",
+            )
+        ],
+    )
+    watchlist = Watchlist(nombre="empleo", keywords=["oposiciones"])
+
+    assert len(buscar(conn, SearchFilters(), watchlist=watchlist)) == 1
+
+
+def test_una_watchlist_sin_criterios_no_filtra(conn, convocatoria_factory):
     guardar_convocatorias(conn, [convocatoria_factory()])
-    assert buscar(conn, SearchFilters(watchlist="becas")) == []
+    assert len(buscar(conn, SearchFilters(), watchlist=Watchlist(nombre="todo"))) == 1
 
 
 # --------------------------------------------------------------------------- #
