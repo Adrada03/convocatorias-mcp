@@ -9,8 +9,9 @@ Se usa **conversando con Claude** (Desktop o Code) en lenguaje natural, y trae
 un dashboard estático para consultar sin instalar nada.
 
 > **Estado: en construcción.** Funciona end-to-end contra el BOE real: el
-> índice local tiene 14.933 convocatorias de los últimos 90 días, con servidor
-> MCP, ingesta incremental y el comando `doctor`. Pendiente: el dashboard.
+> índice local tiene unas 15.000 convocatorias de los últimos 90 días, con
+> servidor MCP de ocho tools, ingesta incremental, ranking por watchlists y
+> dashboard. Pendiente: activar el despliegue del dashboard.
 
 <!-- TODO: GIF de Claude usando el servidor en vivo -->
 
@@ -229,6 +230,7 @@ entrada y no solo añadir.
 |---|---|
 | `convocatorias-mcp` | Arranca el servidor MCP por stdio. Es como lo invoca Claude Desktop. |
 | `convocatorias-mcp ingest [--backfill N] [--fuente X] [--forzar]` | Puebla el índice con los sumarios que falten. Incremental: no repite fechas ya resueltas, pero sí reintenta las que fallaron. Imprime una línea por día. |
+| `convocatorias-mcp export [--dias N] [--todo] [--salida RUTA]` | Genera el JSON que consume el dashboard. |
 | `convocatorias-mcp doctor [--check-api]` | Revisa la instalación. |
 
 ### La fuente de desarrollo
@@ -461,6 +463,60 @@ el BOE. Devuelve código de salida 1 si algo impide funcionar.
 su salida está pensada para pegarse en un issue. De las claves dice la longitud,
 de las watchlists cuenta las keywords sin listarlas, y la dirección del digest
 no se imprime ni enmascarada.
+
+## El dashboard
+
+Una página HTML estática, sin backend y sin framework, para consultar el índice
+sin instalar nada. Se genera así:
+
+```bash
+convocatorias-mcp export
+python -m http.server -d dashboard 8000
+```
+
+Y se abre en [localhost:8000](http://localhost:8000). Hace falta el servidor
+porque abriendo el fichero con doble clic el navegador bloquea la lectura de
+`data.json`; si pasa, la propia página lo explica y da el comando.
+
+Permite buscar por texto, filtrar por watchlist, sección, estado y rango de
+fechas, y ordenar por fecha, por plazo o por afinidad. Lo que vence en siete
+días o menos va marcado en rojo, y lo del mes, en ámbar. Funciona en móvil y
+sigue el modo claro u oscuro del sistema.
+
+### Qué se exporta, y qué no
+
+**Solo metadatos.** Nunca textos completos: el texto oficial vive en el BOE y
+la página enlaza a él. Ni siquiera se exporta la URL, porque se deriva del
+identificador; eran 940 KB de repetir la misma cadena 15.000 veces.
+
+Los tamaños, medidos sobre el índice real de 14.935 convocatorias:
+
+| Variante | Crudo | Gzip |
+|---|---|---|
+| Todo, claves legibles | 7,31 MB | 926 KB |
+| Todo, claves cortas y sin campos vacíos | 4,42 MB | 747 KB |
+| **30 días + coincidencias (por defecto)** | **1,66 MB** | **~290 KB** |
+
+Por defecto se recorta a los últimos 30 días **más todo lo que coincida con
+alguna watchlist**, y la página lo dice en su cabecera junto a la fecha hasta
+la que llegan los datos. Una beca de hace dos meses que encaja con tu perfil es
+exactamente lo que no se puede perder por recortar.
+
+El recorte no es por la red —gzipped el índice entero son 747 KB y GitHub Pages
+comprime— sino porque 4,4 MB de JSON son 15.000 objetos que un móvil tiene que
+parsear y mantener en memoria. Con `--todo` se exporta completo, que en
+escritorio va sobrado.
+
+### Despliegue
+
+`.github/workflows/pages.yml` está escrito pero **no activo**: solo se puede
+lanzar a mano, y publicar requiere además activar Pages en el repositorio. El
+sitio irá en `convocatorias.alvaroadrada.dev` vía CNAME.
+
+Antes de activarlo hay una decisión pendiente, y está anotada en el propio
+workflow: `dashboard/data.json` está en `.gitignore` porque se genera desde el
+índice local, así que hay que elegir si se versiona, se genera en CI con una
+ingesta programada o se sube como artefacto.
 
 ## Acceso educado a las fuentes
 

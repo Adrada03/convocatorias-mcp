@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Convocatorias oficiales</title>
+<meta name="description" content="Buscador de convocatorias publicadas en el BOE: becas, ayudas, empleo público y subvenciones.">
+<style>
+  /* Tokens. El modo oscuro sigue al sistema; no hay interruptor porque no
+     hace falta: si tu sistema está en oscuro, la página también. */
+  :root {
+    color-scheme: light dark;
+    --fondo: #f6f7f9;
+    --superficie: #ffffff;
+    --borde: #e1e4e8;
+    --texto: #1b1f23;
+    --suave: #5b6570;
+    --acento: #0b5cad;
+    --urgente-fondo: #fdecec;
+    --urgente-texto: #a4201d;
+    --proximo-fondo: #fff6e5;
+    --proximo-texto: #8a5a00;
+    --chip: #eef2f7;
+    --radio: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fondo: #15181c;
+      --superficie: #1d2126;
+      --borde: #2f353c;
+      --texto: #e7eaee;
+      --suave: #9aa4b0;
+      --acento: #79b8ff;
+      --urgente-fondo: #3a1d1d;
+      --urgente-texto: #ffb4b0;
+      --proximo-fondo: #352a12;
+      --proximo-texto: #f0c674;
+      --chip: #262c33;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 0 16px 48px;
+    background: var(--fondo);
+    color: var(--texto);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .contenedor { max-width: 1040px; margin: 0 auto; }
+  a { color: var(--acento); }
+
+  header { padding: 28px 0 16px; }
+  h1 { margin: 0 0 6px; font-size: 1.6rem; line-height: 1.25; }
+  .subtitulo { margin: 0; color: var(--suave); }
+  .cobertura {
+    margin: 14px 0 0;
+    padding: 10px 12px;
+    background: var(--superficie);
+    border: 1px solid var(--borde);
+    border-radius: var(--radio);
+    color: var(--suave);
+    font-size: 0.875rem;
+  }
+  .cobertura strong { color: var(--texto); }
+
+  /* Filtros: una columna en móvil, rejilla en pantallas grandes. */
+  form.filtros {
+    display: grid;
+    gap: 10px;
+    margin: 18px 0;
+    padding: 14px;
+    background: var(--superficie);
+    border: 1px solid var(--borde);
+    border-radius: var(--radio);
+  }
+  @media (min-width: 720px) {
+    form.filtros { grid-template-columns: repeat(3, 1fr); align-items: end; }
+    form.filtros .ancho { grid-column: 1 / -1; }
+    .fechas { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  }
+  label { display: block; font-size: 0.8rem; color: var(--suave); margin-bottom: 4px; }
+  input, select, button {
+    width: 100%;
+    padding: 9px 10px;
+    font: inherit;
+    color: var(--texto);
+    background: var(--fondo);
+    border: 1px solid var(--borde);
+    border-radius: 8px;
+  }
+  input:focus-visible, select:focus-visible, button:focus-visible {
+    outline: 2px solid var(--acento);
+    outline-offset: 1px;
+  }
+  button { cursor: pointer; background: var(--chip); }
+  button:hover { border-color: var(--acento); }
+
+  .contador { margin: 0 0 12px; color: var(--suave); font-size: 0.9rem; }
+
+  ol.resultados { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  li.convocatoria {
+    padding: 14px;
+    background: var(--superficie);
+    border: 1px solid var(--borde);
+    border-left: 3px solid transparent;
+    border-radius: var(--radio);
+  }
+  li.urgente { border-left-color: var(--urgente-texto); }
+  li.proximo { border-left-color: var(--proximo-texto); }
+  .titulo { margin: 0 0 8px; font-size: 1rem; font-weight: 600; }
+  .titulo a { text-decoration: none; }
+  .titulo a:hover { text-decoration: underline; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 0.8rem; }
+  .chip {
+    padding: 2px 8px;
+    background: var(--chip);
+    border-radius: 999px;
+    color: var(--suave);
+    white-space: nowrap;
+  }
+  .chip.seccion { font-weight: 600; color: var(--texto); }
+  .chip.plazo-urgente { background: var(--urgente-fondo); color: var(--urgente-texto); font-weight: 600; }
+  .chip.plazo-proximo { background: var(--proximo-fondo); color: var(--proximo-texto); font-weight: 600; }
+  .chip.watchlist { background: transparent; border: 1px solid var(--acento); color: var(--acento); }
+  .departamento { margin: 8px 0 0; color: var(--suave); font-size: 0.8rem; }
+
+  .mas { margin: 18px 0 0; }
+  .vacio, .error {
+    padding: 20px;
+    background: var(--superficie);
+    border: 1px solid var(--borde);
+    border-radius: var(--radio);
+    color: var(--suave);
+  }
+  .error code {
+    display: block;
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: var(--fondo);
+    border-radius: 6px;
+    color: var(--texto);
+    font-size: 0.85rem;
+    overflow-x: auto;
+  }
+  footer {
+    margin-top: 32px;
+    padding-top: 16px;
+    border-top: 1px solid var(--borde);
+    color: var(--suave);
+    font-size: 0.8rem;
+  }
+  footer p { margin: 4px 0; }
+</style>
+</head>
+<body>
+<div class="contenedor">
+
+  <header>
+    <h1>Convocatorias oficiales</h1>
+    <p class="subtitulo">Becas, ayudas, empleo público y subvenciones publicadas en el BOE.</p>
+    <p class="cobertura" id="cobertura">Cargando datos…</p>
+  </header>
+
+  <form class="filtros" id="filtros" autocomplete="off">
+    <div class="ancho">
+      <label for="texto">Buscar en el título o el departamento</label>
+      <input type="search" id="texto" placeholder="informática, subvenciones, universidad…">
+    </div>
+    <div>
+      <label for="watchlist">Watchlist</label>
+      <select id="watchlist"><option value="">Todas</option></select>
+    </div>
+    <div>
+      <label for="seccion">Sección</label>
+      <select id="seccion"><option value="">Todas</option></select>
+    </div>
+    <div>
+      <label for="estado">Estado</label>
+      <select id="estado"><option value="">Todos</option></select>
+    </div>
+    <div class="fechas ancho">
+      <div>
+        <label for="desde">Publicadas desde</label>
+        <input type="date" id="desde">
+      </div>
+      <div>
+        <label for="hasta">Publicadas hasta</label>
+        <input type="date" id="hasta">
+      </div>
+    </div>
+    <div>
+      <label for="orden">Ordenar por</label>
+      <select id="orden">
+        <option value="fecha-desc">Fecha, más recientes primero</option>
+        <option value="fecha-asc">Fecha, más antiguas primero</option>
+        <option value="plazo">Plazo, lo que antes vence</option>
+        <option value="score">Afinidad con mis watchlists</option>
+      </select>
+    </div>
+    <div>
+      <label for="limpiar">&nbsp;</label>
+      <button type="reset" id="limpiar">Limpiar filtros</button>
+    </div>
+  </form>
+
+  <p class="contador" id="contador" aria-live="polite"></p>
+  <ol class="resultados" id="resultados"></ol>
+  <div class="mas"><button type="button" id="mas" hidden>Mostrar más</button></div>
+
+  <footer id="pie"></footer>
+</div>
+
+<script>
+"use strict";
+
+// Cuántas se pintan de golpe. Con 6.000 registros, meterlos todos en el DOM
+// hace que el móvil se arrastre; con esto el scroll va fino.
+const PAGINA = 60;
+const DIA = 86400000;
+
+const estado = { datos: null, filtradas: [], mostradas: 0 };
+
+const $ = (id) => document.getElementById(id);
+const hoy = new Date(new Date().toDateString());
+
+/** Quita acentos y pasa a minúsculas, igual que hace el índice del servidor. */
+function normalizar(texto) {
+  return (texto || "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+}
+
+function diasHasta(iso) {
+  if (!iso) return null;
+  return Math.round((new Date(iso + "T00:00:00") - hoy) / DIA);
+}
+
+function fechaCorta(iso) {
+  if (!iso) return "";
+  const [a, m, d] = iso.split("-");
+  return `${d}/${m}/${a}`;
+}
+
+function etiquetaPlazo(dias) {
+  if (dias === null) return null;
+  if (dias < 0) return { texto: "plazo vencido", clase: "chip" };
+  if (dias === 0) return { texto: "vence hoy", clase: "chip plazo-urgente" };
+  if (dias <= 7) return { texto: `vence en ${dias} d.`, clase: "chip plazo-urgente" };
+  if (dias <= 30) return { texto: `vence en ${dias} d.`, clase: "chip plazo-proximo" };
+  return { texto: `plazo ${""}`, clase: "chip" };
+}
+
+function rellenarSelect(select, valores, etiquetas) {
+  for (const valor of valores) {
+    const option = document.createElement("option");
+    option.value = valor;
+    option.textContent = etiquetas ? etiquetas[valor] || valor : valor;
+    select.append(option);
+  }
+}
+
+function leerFiltros() {
+  return {
+    texto: normalizar($("texto").value).split(/\s+/).filter(Boolean),
+    watchlist: $("watchlist").value,
+    seccion: $("seccion").value,
+    estadoSeg: $("estado").value,
+    desde: $("desde").value,
+    hasta: $("hasta").value,
+    orden: $("orden").value,
+  };
+}
+
+function filtrar() {
+  const f = leerFiltros();
+  const resultado = estado.datos.convocatorias.filter((c) => {
+    if (f.seccion && c.s !== f.seccion) return false;
+    if (f.watchlist && !(c.w || []).includes(f.watchlist)) return false;
+    if (f.estadoSeg && (c.e || "nueva") !== f.estadoSeg) return false;
+    if (f.desde && c.f < f.desde) return false;
+    if (f.hasta && c.f > f.hasta) return false;
+    if (f.texto.length) {
+      const buscable = c._b || (c._b = normalizar(c.t + " " + (c.d || "")));
+      if (!f.texto.every((palabra) => buscable.includes(palabra))) return false;
+    }
+    return true;
+  });
+
+  // El orden por plazo deja al final lo que no tiene plazo: decir "sin plazo"
+  // antes que "vence pronto" seria enterrar lo urgente.
+  const orden = {
+    "fecha-desc": (a, b) => (a.f < b.f ? 1 : a.f > b.f ? -1 : a.i < b.i ? -1 : 1),
+    "fecha-asc": (a, b) => (a.f > b.f ? 1 : a.f < b.f ? -1 : a.i < b.i ? -1 : 1),
+    plazo: (a, b) => {
+      if (a.p && b.p) return a.p < b.p ? -1 : a.p > b.p ? 1 : 0;
+      if (a.p) return -1;
+      if (b.p) return 1;
+      return a.f < b.f ? 1 : -1;
+    },
+    score: (a, b) => (b.sc || 0) - (a.sc || 0) || (a.f < b.f ? 1 : -1),
+  }[f.orden];
+
+  resultado.sort(orden);
+  return resultado;
+}
+
+function tarjeta(c) {
+  const li = document.createElement("li");
+  li.className = "convocatoria";
+
+  const dias = diasHasta(c.p);
+  if (dias !== null && dias >= 0 && dias <= 7) li.classList.add("urgente");
+  else if (dias !== null && dias > 7 && dias <= 30) li.classList.add("proximo");
+
+  const titulo = document.createElement("p");
+  titulo.className = "titulo";
+  const enlace = document.createElement("a");
+  enlace.href = estado.datos.url_base + c.i;
+  enlace.target = "_blank";
+  enlace.rel = "noopener";
+  enlace.textContent = c.t;
+  titulo.append(enlace);
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+
+  const chip = (texto, clase) => {
+    const span = document.createElement("span");
+    span.className = clase || "chip";
+    span.textContent = texto;
+    return span;
+  };
+
+  const nombreSeccion = (estado.datos.secciones || {})[c.s] || c.s;
+  const seccion = chip(c.s, "chip seccion");
+  seccion.title = nombreSeccion;
+  meta.append(seccion, chip(fechaCorta(c.f)));
+
+  if (c.p) {
+    const etiqueta = etiquetaPlazo(dias);
+    const texto = dias !== null && dias > 30 ? `plazo ${fechaCorta(c.p)}` : etiqueta.texto;
+    const elemento = chip(texto, etiqueta.clase);
+    elemento.title = `Plazo: ${fechaCorta(c.p)}`;
+    meta.append(elemento);
+  }
+  if (c.e && c.e !== "nueva") meta.append(chip(c.e));
+  for (const w of c.w || []) meta.append(chip(w, "chip watchlist"));
+  if (c.sc != null) meta.append(chip(`afinidad ${c.sc}`));
+  meta.append(chip(c.i));
+
+  li.append(titulo, meta);
+
+  if (c.d) {
+    const departamento = document.createElement("p");
+    departamento.className = "departamento";
+    departamento.textContent = c.d;
+    li.append(departamento);
+  }
+  return li;
+}
+
+function pintar(reiniciar) {
+  const lista = $("resultados");
+  if (reiniciar) {
+    lista.replaceChildren();
+    estado.mostradas = 0;
+  }
+
+  const trozo = estado.filtradas.slice(estado.mostradas, estado.mostradas + PAGINA);
+  const fragmento = document.createDocumentFragment();
+  for (const c of trozo) fragmento.append(tarjeta(c));
+  lista.append(fragmento);
+  estado.mostradas += trozo.length;
+
+  const total = estado.filtradas.length;
+  $("contador").textContent = total
+    ? `${total.toLocaleString("es-ES")} convocatorias · mostrando ${estado.mostradas.toLocaleString("es-ES")}`
+    : "";
+  $("mas").hidden = estado.mostradas >= total;
+
+  if (!total) {
+    const vacio = document.createElement("li");
+    vacio.className = "vacio";
+    vacio.textContent =
+      "Ningún resultado con estos filtros. Prueba con menos palabras: se exigen todas.";
+    lista.append(vacio);
+  }
+}
+
+function aplicar() {
+  estado.filtradas = filtrar();
+  pintar(true);
+}
+
+function describirCobertura() {
+  const d = estado.datos;
+  const partes = [];
+  if (d.cubre_hasta) {
+    partes.push(`Los datos llegan hasta el <strong>${fechaCorta(d.cubre_hasta)}</strong>.`);
+  }
+  const r = d.recorte || {};
+  if (r.aplicado) {
+    partes.push(
+      `Se muestran las <strong>${(r.exportadas || 0).toLocaleString("es-ES")}</strong> ` +
+        `convocatorias de los últimos ${r.dias} días, más todo lo que coincide con alguna ` +
+        `watchlist, de un índice de ${(r.total_indice || 0).toLocaleString("es-ES")}.`
+    );
+  } else {
+    partes.push(
+      `Índice completo: <strong>${(r.exportadas || 0).toLocaleString("es-ES")}</strong> convocatorias.`
+    );
+  }
+  partes.push("Esta página no dice si cumples los requisitos: eso está en el texto oficial.");
+  $("cobertura").innerHTML = partes.join(" ");
+}
+
+function pintarPie() {
+  const d = estado.datos;
+  const pie = $("pie");
+  for (const fuente of d.fuentes || [{ cita: d.cita, licencia: d.licencia }]) {
+    const p = document.createElement("p");
+    p.append(document.createTextNode(fuente.cita + " "));
+    const enlace = document.createElement("a");
+    enlace.href = "https://www.boe.es";
+    enlace.target = "_blank";
+    enlace.rel = "noopener";
+    enlace.textContent = "https://www.boe.es";
+    p.append(enlace);
+    if (fuente.licencia) {
+      p.append(document.createTextNode(" · "));
+      const licencia = document.createElement("a");
+      licencia.href = fuente.licencia;
+      licencia.target = "_blank";
+      licencia.rel = "noopener";
+      licencia.textContent = "Condiciones de reutilización";
+      p.append(licencia);
+    }
+    pie.append(p);
+  }
+  const generado = document.createElement("p");
+  generado.textContent =
+    `Datos exportados el ${new Date(d.generado).toLocaleString("es-ES")}. ` +
+    "Esta página no es un servicio oficial ni está respaldada por el BOE.";
+  pie.append(generado);
+}
+
+function mostrarError(error) {
+  $("cobertura").textContent = "No se han podido cargar los datos.";
+  const lista = $("resultados");
+  const li = document.createElement("li");
+  li.className = "error";
+  li.innerHTML =
+    "<strong>No se ha podido leer <code>data.json</code>.</strong><br>" +
+    "Si has abierto el fichero con doble clic, el navegador bloquea la lectura " +
+    "por seguridad. Levanta un servidor local en esta carpeta:" +
+    "<code>python -m http.server -d dashboard 8000</code>" +
+    "y abre <a href='http://localhost:8000'>http://localhost:8000</a>.<br><br>" +
+    "Si el fichero no existe, genéralo con <code>convocatorias-mcp export</code>." +
+    `<br><small>Detalle: ${error}</small>`;
+  lista.replaceChildren(li);
+}
+
+async function iniciar() {
+  try {
+    const respuesta = await fetch("data.json", { cache: "no-cache" });
+    if (!respuesta.ok) throw new Error(`HTTP ${respuesta.status}`);
+    estado.datos = await respuesta.json();
+  } catch (error) {
+    mostrarError(error.message || error);
+    return;
+  }
+
+  rellenarSelect($("watchlist"), estado.datos.watchlists || []);
+  rellenarSelect(
+    $("seccion"),
+    Object.keys(estado.datos.secciones || {}),
+    estado.datos.secciones
+  );
+  rellenarSelect($("estado"), estado.datos.estados || []);
+
+  describirCobertura();
+  pintarPie();
+  aplicar();
+
+  let temporizador;
+  $("texto").addEventListener("input", () => {
+    clearTimeout(temporizador);
+    temporizador = setTimeout(aplicar, 150);
+  });
+  for (const id of ["watchlist", "seccion", "estado", "desde", "hasta", "orden"]) {
+    $(id).addEventListener("change", aplicar);
+  }
+  $("filtros").addEventListener("reset", () => setTimeout(aplicar, 0));
+  $("mas").addEventListener("click", () => pintar(false));
+}
+
+iniciar();
+</script>
+</body>
+</html>
