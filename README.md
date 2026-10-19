@@ -70,6 +70,61 @@ declara **de dónde viene su consentimiento**, y la comprobación de `robots.txt
 se aplica solo a las que se apoyan en él. Lo que no cambia en ninguna fuente:
 el User-Agent identificado, el rate limiting y la caché.
 
+## Configuración
+
+### Credenciales de Adzuna
+
+Adzuna es la fuente principal: un agregador, así que con una sola integración
+legítima se cubre mucho volumen. Su API es gratuita con registro.
+
+1. Regístrate en [developer.adzuna.com/signup](https://developer.adzuna.com/signup).
+   Te dan un `app_id` y un `app_key`.
+2. Copia la plantilla y rellena tus claves:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+3. Comprueba que han quedado bien:
+
+   ```bash
+   jobscout-mcp doctor --check-api
+   ```
+
+`.env` está en `.gitignore` y no entra nunca al repositorio. El comando
+`doctor` **nunca imprime el valor de una credencial**: solo dice si está
+configurada y cuántos caracteres tiene, para que su salida se pueda pegar en un
+issue sin filtrar nada.
+
+Límites del plan gratuito: **25 peticiones por minuto y 250 al día**. Sobran
+para uso personal, pero son la razón por la que la caché no es una optimización
+sino parte del funcionamiento normal.
+
+Sin credenciales el servidor arranca igual: Adzuna se marca como `skipped` en
+`source_status` y el resto de fuentes funciona.
+
+### El comando `doctor`
+
+Este servidor lo lanza Claude Desktop en segundo plano, así que cuando algo está
+mal configurado no hay ningún mensaje de error a la vista. `doctor` es el sitio
+donde mirar:
+
+```bash
+jobscout-mcp doctor
+```
+
+Revisa la versión de Python, el `.env`, las credenciales, el `profile.yaml` (y
+avisa si tiene un typo, en vez de ignorarlo en silencio) y si la carpeta de la
+caché es escribible. Sin `--check-api` no sale a la red, así que no gasta cuota.
+Devuelve código de salida 1 si encuentra algo que impida funcionar.
+
+### Perfil de afinidad
+
+El ranking es opcional. Si copias `profile.example.yaml` a `profile.yaml` y lo
+rellenas, los resultados se ordenan por afinidad con tu perfil; si no, se
+ordenan por fecha. `profile.yaml` también está en `.gitignore`: tus datos son
+tuyos, y el repo solo versiona la plantilla.
+
 ## Licencia
 
 MIT. Ver [LICENSE](LICENSE).
