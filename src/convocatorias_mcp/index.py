@@ -41,6 +41,7 @@ __all__ = [
     "guardar_texto",
     "obtener_convocatoria",
     "registrar_ingesta",
+    "ultima_ingesta",
 ]
 
 #: Orden de presentación, y el mismo que :attr:`Convocatoria.clave_orden`.
@@ -174,6 +175,22 @@ def registrar_ingesta(conn: sqlite3.Connection, salud: SourceHealth) -> None:
             salud.ingerido_at.isoformat(),
         ),
     )
+
+
+def ultima_ingesta(conn: sqlite3.Connection) -> tuple[str, date] | None:
+    """Fuente y fecha de la ingesta más reciente, o ``None`` si el índice está vacío.
+
+    Devuelve la fuente además de la fecha porque es la que hay que seguir
+    alimentando: un índice poblado con la fuente de desarrollo no debe empezar
+    a mezclar días del BOE real por su cuenta.
+    """
+    fila = conn.execute(
+        "SELECT fuente, MAX(fecha) AS ultima FROM source_health GROUP BY fuente "
+        "ORDER BY ultima DESC LIMIT 1"
+    ).fetchone()
+    if fila is None or not fila["ultima"]:
+        return None
+    return fila["fuente"], date.fromisoformat(fila["ultima"])
 
 
 def fechas_registradas(conn: sqlite3.Connection, fuente: str) -> set[date]:

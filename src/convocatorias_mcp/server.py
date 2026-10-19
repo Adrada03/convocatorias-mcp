@@ -18,7 +18,8 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -27,7 +28,8 @@ from mcp.types import ToolAnnotations
 from convocatorias_mcp import __version__
 from convocatorias_mcp.config import Settings, hoy_boletin
 from convocatorias_mcp.db import estado_del_indice, open_index
-from convocatorias_mcp.index import buscar, guardar_texto, obtener_convocatoria
+from convocatorias_mcp.index import buscar, guardar_texto, obtener_convocatoria, ultima_ingesta
+from convocatorias_mcp.ingest import ingerir
 from convocatorias_mcp.models import AVISO_NO_ELEGIBILIDAD, Convocatoria, SearchFilters, Seccion
 from convocatorias_mcp.sources import FUENTES, crear_fuente
 from convocatorias_mcp.sources.base import SourceError
@@ -100,6 +102,136 @@ def _resumir(convocatoria: Convocatoria) -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class Frescura:
+    """Hasta cuándo llega el índice, y si eso es un problema.
+
+    Existe para que el modelo nunca diga "no hay convocatorias" cuando lo que
+    pasa es que no ha mirado: cada respuesta lleva esta información.
+    """
+
+    fuente: str | None = None
+    ultima_fecha: date | None = None
+    dias_atraso: int | None = None
+    desactualizado: bool = False
+    aviso: str | None = None
+    dias_puestos_al_dia: int = 0
+    convocatorias_nuevas: int = 0
+
+    def como_dict(self) -> dict[str, Any]:
+        datos: dict[str, Any] = {
+            "indice_cubre_hasta": self.ultima_fecha.isoformat() if self.ultima_fecha else None,
+            "dias_de_atraso": self.dias_atraso,
+            "indice_desactualizado": self.desactualizado,
+        }
+        if self.aviso:
+            datos["aviso_indice"] = self.aviso
+        if self.dias_puestos_al_dia:
+            datos["puesta_al_dia"] = (
+                f"Se han ingerido {self.dias_puestos_al_dia} día(s) que faltaban, "
+                f"con {self.convocatorias_nuevas} convocatorias nuevas, antes de responder."
+            )
+        return datos
+
+
+async def _poner_al_dia(ajustes: Settings, intentados: set[str]) -> Frescura:
+    """Comprueba la frescura del índice y, si falta poco, lo pone al día.
+
+    Tres casos, y el reparto importa:
+
+    * **Al día**: no hace nada.
+    * **Atraso pequeño** (hasta ``auto_ingest_dias``): ingiere los días que
+      faltan antes de responder. Son segundos, y evita que alguien trabaje con
+      datos viejos sin saberlo.
+    * **Atraso grande**: no bloquea la consulta. Responde con lo que hay y
+      avisa de que hay que ejecutar ``convocatorias-mcp ingest``, porque un
+      backfill de semanas no cabe en el tiempo de una respuesta.
+
+    Solo se intenta una vez por proceso y fuente: si la red está caída, no tiene
+    sentido reintentar en cada consulta y dejar al usuario esperando siempre.
+    """
+    hoy = hoy_boletin()
+    with _indice(ajustes) as conn:
+        ultima = ultima_ingesta(conn)
+
+    if ultima is None:
+        # Sin registro de ingesta no se sabe hasta cuándo se ha comprobado la
+        # fuente. Si aun así hay datos, se dice hasta dónde llegan: es menos
+        # información que una fecha comprobada, pero mejor que un null.
+        with _indice(ajustes) as conn:
+            estado = estado_del_indice(conn)
+        if estado.convocatorias == 0:
+            return Frescura(
+                desactualizado=True,
+                aviso=(
+                    "El índice local está vacío: no se ha ingerido nada todavía, así que "
+                    "no se puede saber si hay convocatorias. Dile al usuario que ejecute "
+                    "'convocatorias-mcp ingest'."
+                ),
+            )
+        return Frescura(
+            ultima_fecha=estado.ultima_publicacion,
+            desactualizado=True,
+            aviso=(
+                "El índice tiene datos pero ningún registro de ingesta, así que no se "
+                "puede saber si están al día. Puede haber convocatorias más recientes "
+                "que no están aquí."
+            ),
+        )
+
+    fuente, ultima_fecha = ultima
+    atraso = (hoy - ultima_fecha).days
+    if atraso <= 0:
+        return Frescura(fuente=fuente, ultima_fecha=ultima_fecha, dias_atraso=max(atraso, 0))
+
+    def desactualizada(extra: str = "") -> Frescura:
+        return Frescura(
+            fuente=fuente,
+            ultima_fecha=ultima_fecha,
+            dias_atraso=atraso,
+            desactualizado=True,
+            aviso=(
+                f"El índice llega al {ultima_fecha.isoformat()} y hoy es "
+                f"{hoy.isoformat()}: faltan {atraso} día(s). Puede haber convocatorias "
+                "más recientes que no están aquí, así que no afirmes que no hay nada. "
+                f"Dile al usuario que ejecute 'convocatorias-mcp ingest'.{extra}"
+            ),
+        )
+
+    if ajustes.auto_ingest_dias <= 0 or atraso > ajustes.auto_ingest_dias:
+        return desactualizada()
+    if fuente in intentados:
+        return desactualizada(" Ya se intentó poner al día en esta sesión y no se pudo.")
+
+    intentados.add(fuente)
+    try:
+        source = crear_fuente(fuente)
+    except KeyError:
+        return desactualizada(f" La fuente {fuente!r} ya no está registrada.")
+
+    conn = open_index(ajustes.index_path)
+    try:
+        resumen = await ingerir(conn, source, desde=ultima_fecha + timedelta(days=1), hasta=hoy)
+        nueva_ultima = ultima_ingesta(conn)
+    finally:
+        conn.close()
+        await source.aclose()
+
+    if resumen.errores:
+        return desactualizada(
+            f" Al ponerlo al día fallaron {len(resumen.errores)} día(s): {resumen.errores[0][1]}"
+        )
+
+    fecha_final = nueva_ultima[1] if nueva_ultima else ultima_fecha
+    return Frescura(
+        fuente=fuente,
+        ultima_fecha=fecha_final,
+        dias_atraso=(hoy - fecha_final).days,
+        dias_puestos_al_dia=resumen.dias_pedidos,
+        convocatorias_nuevas=resumen.convocatorias,
+    )
+
+
 async def _descargar_texto(
     ajustes: Settings, convocatoria: Convocatoria
 ) -> tuple[Convocatoria, str | None]:
@@ -143,6 +275,9 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
     # Se cargan una vez al arrancar: el fichero del usuario no cambia en
     # caliente y leerlo en cada búsqueda sería gratuito pero absurdo.
     sinonimos = cargar_sinonimos(ajustes.sinonimos_path)
+    # Un intento de puesta al día por proceso y fuente: si la red está
+    # caída, no se hace esperar al usuario en cada consulta.
+    intentos_de_puesta_al_dia: set[str] = set()
     server = MCPServer(
         name="convocatorias",
         title="Convocatorias oficiales",
@@ -155,7 +290,7 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
         title="Buscar convocatorias",
         annotations=SOLO_LECTURA,
     )
-    def search_convocatorias(
+    async def search_convocatorias(
         keywords: str | None = None,
         seccion: str | None = None,
         desde: date | None = None,
@@ -239,6 +374,10 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
             include_vistas=include_vistas,
             limite=limite,
         )
+        # Antes de buscar, al día: responder con datos viejos sin avisar es
+        # peor que tardar unos segundos.
+        frescura = await _poner_al_dia(ajustes, intentos_de_puesta_al_dia)
+
         with _indice(ajustes) as conn:
             resultados = buscar(conn, filtros, sinonimos=sinonimos)
             estado = estado_del_indice(conn)
@@ -252,16 +391,12 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
         # Se mira si hay convocatorias, no si hay dias registrados: un indice
         # con datos pero sin registro de ingesta no esta vacio, y decirle al
         # modelo que lo esta le haria afirmar que no existe nada.
+        respuesta.update(frescura.como_dict())
         if estado.convocatorias == 0:
             respuesta["indice_vacio"] = (
                 "El índice local está vacío: no hay nada que buscar todavía. "
                 "El usuario tiene que ejecutar 'convocatorias-mcp ingest' para poblarlo."
             )
-        # Que el modelo sepa hasta dónde llega el índice evita que afirme que
-        # "no hay nada" cuando lo que pasa es que falta ingerir.
-        cubre_hasta = estado.ultima_fecha or estado.ultima_publicacion
-        if cubre_hasta:
-            respuesta["indice_cubre_hasta"] = cubre_hasta.isoformat()
         return respuesta
 
     @server.tool(
@@ -321,13 +456,14 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
         title="Estado del índice y las fuentes",
         annotations=SOLO_LECTURA,
     )
-    def source_health() -> dict[str, Any]:
+    async def source_health() -> dict[str, Any]:
         """Informa de hasta dónde llega el índice local y si hay huecos.
 
         Úsalo cuando una búsqueda no devuelva nada y haya que distinguir "no hay
         convocatorias que encajen" de "el índice no tiene esas fechas", o cuando
         el usuario pregunte si los datos están al día.
         """
+        frescura = await _poner_al_dia(ajustes, intentos_de_puesta_al_dia)
         with _indice(ajustes) as conn:
             estado = estado_del_indice(conn)
 
@@ -348,6 +484,7 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
             "huecos_totales": len(estado.huecos),
             "hoy": hoy_boletin().isoformat(),
             "resumen": estado.resumen(),
+            **frescura.como_dict(),
             "fuentes": [
                 {
                     "nombre": clase.name,

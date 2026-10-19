@@ -103,7 +103,7 @@ puede usarlo con su propia cuenta.
 | Tool | Qué hace |
 |---|---|
 | `search_convocatorias` | Filtro de nivel 1 sobre el índice: palabras clave, sección, rango de fechas y ámbito. Devuelve metadatos y enlaces, no textos. |
-| `get_convocatoria` | Una convocatoria concreta con su texto oficial, para que el modelo lea los requisitos (nivel 2). |
+| `get_convocatoria` | Una convocatoria con su texto oficial completo, para que el modelo lea los requisitos (nivel 2). La primera vez lo descarga del boletín y lo cachea; solo bajo demanda, nunca las 15.000 por adelantado. |
 | `source_health` | Hasta dónde llega el índice y si tiene huecos. Sirve para distinguir "no hay nada que encaje" de "esas fechas no están ingeridas". |
 
 Los tools que faltan (`explain_match`, `deadlines_soon`, `mark_solicitada`,
@@ -114,6 +114,46 @@ existe, porque el modelo lo intentaría.
 Toda respuesta lleva el aviso de no elegibilidad y la cita que exige la licencia
 del BOE. No es decorativo: hay tests de que ninguna respuesta puede salir sin
 ellos.
+
+### El índice se pone al día solo
+
+Trabajar con datos viejos sin saberlo es peor que esperar unos segundos, así que
+el servidor comprueba la frescura del índice en cada consulta:
+
+- **Hasta 7 días de atraso** (configurable con `CONVOCATORIAS_AUTO_INGEST_DIAS`):
+  ingiere los días que falten antes de responder. Siete días son como mucho
+  siete peticiones.
+- **Más de 7 días**: no bloquea la consulta. Responde con lo que haya e incluye
+  un aviso de que el índice está desactualizado y de que hay que ejecutar
+  `convocatorias-mcp ingest`, porque un backfill de semanas no cabe en el
+  tiempo de una respuesta.
+- Solo se intenta una vez por sesión: si la red está caída, no se hace esperar
+  al usuario en cada consulta.
+
+Y todas las respuestas, estén al día o no, dicen `indice_cubre_hasta` y
+`dias_de_atraso`. El objetivo es que el modelo **nunca afirme que no hay
+convocatorias cuando lo que pasa es que no ha mirado**.
+
+### El vocabulario del boletín
+
+Los títulos del BOE están en lenguaje administrativo. Una oposición no se titula
+"oposiciones": se titula *"Resolución de 8 de octubre de 2026, de la
+Subsecretaría, por la que se convoca proceso selectivo para ingreso..."*. Buscar
+"oposiciones" sobre 2.255 convocatorias de la sección II.B devolvía cero, y era
+correcto.
+
+La solución principal está en **la descripción del tool**, que enseña al modelo
+qué contiene cada sección y cómo traducir la intención del usuario: el cliente
+es un LLM, y eso es su trabajo, no el de un filtro `LIKE`. Como red de
+seguridad hay además una tabla corta de sinónimos (`oposiciones` → `proceso
+selectivo`, `pruebas selectivas`...), ampliable con un `sinonimos.yaml` propio:
+
+```bash
+cp sinonimos.example.yaml sinonimos.yaml
+```
+
+Cada clave del fichero sustituye la de serie, así que se puede corregir una
+entrada y no solo añadir.
 
 ### Comandos
 

@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from convocatorias_mcp.models import WatchlistsConfig
 
 __all__ = [
+    "DEFAULT_AUTO_INGEST_DIAS",
     "DEFAULT_BACKFILL_DIAS",
     "TZ_BOLETIN",
     "ConfigError",
@@ -44,6 +45,11 @@ TZ_BOLETIN = ZoneInfo("Europe/Madrid")
 
 #: Días que se descargan hacia atrás en el primer arranque.
 DEFAULT_BACKFILL_DIAS = 90
+
+#: Atraso que el servidor se pone al día solo antes de responder. Siete días
+#: son como mucho siete peticiones: segundos. Más que eso no se bloquea una
+#: consulta, se avisa.
+DEFAULT_AUTO_INGEST_DIAS = 7
 
 DEFAULT_INDEX_FILENAME = "convocatorias-index.sqlite3"
 DEFAULT_WATCHLISTS_FILENAME = "watchlists.yaml"
@@ -93,6 +99,11 @@ class Settings(BaseModel):
 
     # --- Ingesta ---------------------------------------------------------- #
     backfill_dias: int = Field(default=DEFAULT_BACKFILL_DIAS, ge=1, le=3650)
+
+    #: Días de atraso que el servidor MCP se pone al día solo, antes de
+    #: responder. Por encima de eso no bloquea: responde con lo que haya y
+    #: avisa. Con 0 se desactiva la puesta al día automática.
+    auto_ingest_dias: int = Field(default=DEFAULT_AUTO_INGEST_DIAS, ge=0, le=90)
 
     # --- Digest por email ------------------------------------------------- #
     # repr=False en todo lo sensible: la contraseña es un secreto y el
@@ -156,6 +167,9 @@ class Settings(BaseModel):
             index_path=index_path,
             sinonimos_path=sinonimos_path,
             backfill_dias=_int_env(env, "CONVOCATORIAS_BACKFILL_DIAS", DEFAULT_BACKFILL_DIAS),
+            auto_ingest_dias=_int_env(
+                env, "CONVOCATORIAS_AUTO_INGEST_DIAS", DEFAULT_AUTO_INGEST_DIAS
+            ),
             smtp_host=_clean(env.get("SMTP_HOST")),
             smtp_port=_int_env(env, "SMTP_PORT", 587),
             smtp_user=_clean(env.get("SMTP_USER")),
