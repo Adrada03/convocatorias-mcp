@@ -507,6 +507,22 @@ comprime— sino porque 4,4 MB de JSON son 15.000 objetos que un móvil tiene qu
 parsear y mantener en memoria. Con `--todo` se exporta completo, que en
 escritorio va sobrado.
 
+### Las watchlists del sitio publicado
+
+El dashboard desplegado usa `watchlists.demo.yaml`, con intereses inventados
+(investigación, empleo público TIC, ayudas al estudio y vivienda), para que se
+vea el ranking y los chips de afinidad funcionando sobre datos reales. La
+propia página avisa de que son de ejemplo.
+
+Las watchlists de verdad viven en `watchlists.yaml`, que no se versiona: los
+criterios de cada uno dicen bastante de uno mismo, y eso no se publica.
+
+Una de ellas lleva `min_score: 0.6` a propósito. Sus keywords incluyen
+"becas", que tira de los sinónimos y arrastra "ayuda" y "subvención",
+palabras que inundan las secciones III y V.B: sin ese mínimo, esa watchlist
+casaría una de cada seis convocatorias del BOE. Es el ejemplo de para qué
+sirve `min_score`.
+
 ### Despliegue
 
 `.github/workflows/pages.yml` está escrito pero **no activo**: solo se puede

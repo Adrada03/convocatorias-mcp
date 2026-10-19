@@ -63,6 +63,13 @@
     font-size: 0.875rem;
   }
   .cobertura strong { color: var(--texto); }
+  .nota-watchlists {
+    margin: 8px 0 0;
+    padding: 8px 10px;
+    background: var(--chip);
+    border-radius: 8px;
+    font-size: 0.8rem;
+  }
 
   /* Filtros: una columna en móvil, rejilla en pantallas grandes. */
   form.filtros {
@@ -414,6 +421,15 @@ function describirCobertura() {
   }
   partes.push("Esta página no dice si cumples los requisitos: eso está en el texto oficial.");
   $("cobertura").innerHTML = partes.join(" ");
+
+  // Si las watchlists son de ejemplo, el sitio lo dice: lo que se ve aquí no
+  // es el perfil de nadie.
+  if (d.nota_watchlists) {
+    const nota = document.createElement("p");
+    nota.className = "nota-watchlists";
+    nota.textContent = d.nota_watchlists;
+    $("cobertura").after(nota);
+  }
 }
 
 function pintarPie() {

@@ -261,3 +261,29 @@ def test_un_indice_vacio_exporta_una_lista_vacia(conn, tmp_path: Path):
     datos = json.loads((tmp_path / "data.json").read_text(encoding="utf-8"))
     assert datos["convocatorias"] == []
     assert datos["cubre_hasta"] is None
+
+
+# --------------------------------------------------------------------------- #
+# La nota de las watchlists
+# --------------------------------------------------------------------------- #
+
+
+def test_la_nota_de_las_watchlists_viaja_al_json(poblado):
+    config = WatchlistsConfig(
+        watchlists=[Watchlist(nombre="becas", keywords=["informatica"])],
+        nota="Estas watchlists son de ejemplo.",
+    )
+
+    datos, _ = construir_datos(poblado, config=config, dias=None, hoy=HOY)
+
+    assert datos["nota_watchlists"] == "Estas watchlists son de ejemplo."
+
+
+def test_sin_nota_el_campo_queda_a_none(poblado):
+    datos, _ = construir_datos(poblado, config=CONFIG, dias=None, hoy=HOY)
+    assert datos["nota_watchlists"] is None
+
+
+def test_sin_watchlists_tampoco_hay_nota(poblado):
+    datos, _ = construir_datos(poblado, config=None, dias=None, hoy=HOY)
+    assert datos["nota_watchlists"] is None

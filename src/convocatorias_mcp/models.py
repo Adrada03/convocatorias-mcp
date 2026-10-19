@@ -622,6 +622,10 @@ class WatchlistsConfig(BaseModel):
 
     watchlists: list[Watchlist] = Field(default_factory=list)
     notificacion: NotificacionConfig = Field(default_factory=NotificacionConfig)
+    #: Texto libre que acompaña a estas watchlists allá donde se muestren. El
+    #: dashboard lo enseña: es como el sitio publicado avisa de que sus
+    #: watchlists son de ejemplo y no las de nadie.
+    nota: str | None = Field(default=None, max_length=300)
 
     @field_validator("watchlists")
     @classmethod

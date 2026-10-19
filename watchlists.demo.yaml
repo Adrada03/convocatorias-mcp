@@ -1,0 +1,41 @@
+# Watchlists de EJEMPLO, para la demostración publicada del dashboard.
+#
+# Los intereses de aquí son inventados y genéricos: sirven para que se vea el
+# ranking y los chips de afinidad funcionando sobre datos reales del BOE, sin
+# publicar los criterios de ninguna persona.
+#
+# Si vas a usar el proyecto, no copies este fichero: copia
+# watchlists.example.yaml a watchlists.yaml y pon lo tuyo. Los criterios de
+# cada uno dicen bastante de uno mismo, y por eso watchlists.yaml está en
+# .gitignore y este fichero no.
+
+nota: >-
+  Estas watchlists son de ejemplo, para enseñar cómo funciona el ranking.
+  Cada usuario define las suyas en su propio watchlists.yaml.
+
+watchlists:
+  - nombre: investigacion
+    keywords: [investigación, proyectos, personal investigador, doctorado]
+    secciones: [III, V.B]
+
+  - nombre: empleo-publico-tic
+    keywords: [informática, sistemas, telecomunicaciones, analista]
+    secciones: [II.B]
+
+  - nombre: ayudas-al-estudio
+    keywords: [becas, matrícula, estudiantes]
+    secciones: [III, V.B]
+    # "becas" tira de los sinónimos y arrastra "ayuda" y "subvención", que
+    # inundan estas dos secciones. Para eso está min_score: sin él esta
+    # watchlist casaría una de cada seis convocatorias del BOE.
+    min_score: 0.6
+
+  - nombre: vivienda
+    # El BOE trae poco de vivienda: lo autonómico va en los boletines de cada
+    # comunidad, que todavía no están implementados. Sirve para enseñar qué
+    # pasa cuando una watchlist casi no encuentra nada.
+    keywords: [vivienda, alquiler, rehabilitación]
+    secciones: [III, V.B]
+
+notificacion:
+  avisar_plazo_dias: 3

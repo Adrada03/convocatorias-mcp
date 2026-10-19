@@ -211,3 +211,20 @@ def test_el_ejemplo_versionado_es_valido():
     config = load_watchlists(ruta)
     assert config is not None
     assert not config.is_empty
+
+
+def test_las_watchlists_de_demostracion_cargan_y_avisan():
+    """El fichero que usa el dashboard publicado.
+
+    Si no cargara, el sitio saldria sin ranking; si no llevara nota, no
+    quedaria claro que sus intereses son inventados y no los de nadie.
+    """
+    ruta = Path(__file__).resolve().parent.parent / "watchlists.demo.yaml"
+
+    config = load_watchlists(ruta)
+
+    assert config is not None
+    assert len(config.watchlists) == 4
+    assert config.nota is not None
+    assert "de ejemplo" in config.nota
+    assert "watchlists.yaml" in config.nota

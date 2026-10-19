@@ -8,10 +8,10 @@
 # igual que en local. No porque el BOE lo exija, sino por cortesía: desde CI es
 # igual de fácil ser educado.
 #
-# NOTA: watchlists.yaml no está versionado, así que el dashboard público sale
-# sin watchlists ni scores. Es lo correcto: las watchlists dicen a qué aspira
-# una persona concreta, y eso no se publica. El sitio enseña los últimos 30
-# días del BOE, que es información pública.
+# El dashboard público usa watchlists.demo.yaml, con intereses inventados, para
+# que se vea el ranking funcionando sobre datos reales sin publicar los
+# criterios de nadie. Las watchlists de verdad viven en watchlists.yaml, que no
+# se versiona.
 #
 # PENDIENTE DE ACTIVAR: hay que poner "Source: GitHub Actions" en Settings >
 # Pages. Hasta entonces el despliegue falla, que es el comportamiento correcto
@@ -38,6 +38,12 @@ concurrency:
 
 env:
   CONVOCATORIAS_INDEX_PATH: ${{ github.workspace }}/.cache/convocatorias-index.sqlite3
+  # Watchlists de ejemplo, versionadas. Las reales de cada uno viven en
+  # watchlists.yaml, que no se versiona: sus criterios dicen a qué aspira una
+  # persona concreta. Con estas, el sitio publicado enseña el ranking y los
+  # chips de afinidad funcionando sin publicar el perfil de nadie, y la propia
+  # página avisa de que son de ejemplo.
+  CONVOCATORIAS_WATCHLISTS_PATH: ${{ github.workspace }}/watchlists.demo.yaml
 
 jobs:
   publicar:

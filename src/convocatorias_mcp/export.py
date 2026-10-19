@@ -210,6 +210,7 @@ def construir_datos(
             "coincidentes": coincidentes,
         },
         "watchlists": [watchlist.nombre for watchlist in watchlists],
+        "nota_watchlists": config.nota if config else None,
         "secciones": {
             seccion.value: seccion.descripcion
             for seccion in Seccion
