@@ -1,6 +1,10 @@
 # Perfil del usuario: datos personales, nunca se versiona
 profile.yaml
 
+# Credenciales de API. Nunca al repo.
+.env
+.env.local
+
 # Caché y exportaciones locales
 *.db
 *.sqlite3

@@ -26,6 +26,7 @@ dependencies = [
   "beautifulsoup4>=4.12",
   "lxml>=5.2",
   "pyyaml>=6.0",
+  "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -38,7 +39,7 @@ dev = [
 ]
 
 [project.scripts]
-jobscout-mcp = "jobscout_mcp.server:main"
+jobscout-mcp = "jobscout_mcp.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Adrada03/jobscout-mcp"
