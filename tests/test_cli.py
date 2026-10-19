@@ -2,11 +2,13 @@
 
 Dos cosas que verificar de verdad: que distingue un problema que impide
 funcionar (código de salida 1) de un aviso (código 0), y que **la salida no
-contiene nunca una credencial**, porque está pensada para pegarse en un issue.
+contiene nunca una credencial ni un dato personal**, porque está pensada para
+pegarse en un issue.
 """
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import httpx
@@ -15,49 +17,37 @@ import respx
 
 from convocatorias_mcp.cli import (
     build_parser,
-    check_adzuna_api,
-    check_dotenv,
-    check_profile,
+    check_boe,
+    check_index,
     check_python,
+    check_smtp,
+    check_watchlists,
     main,
     run_doctor,
 )
 from convocatorias_mcp.config import Settings
+from convocatorias_mcp.db import open_index
 
-SEARCH_URL = "https://api.adzuna.com/v1/api/jobs/es/search/1"
+SUMARIO_URL = "https://www.boe.es/datosabiertos/api/boe/sumario/20261019"
 
-RESPUESTA_ADZUNA = {
-    "count": 1234,
-    "mean": 42000.0,
-    "results": [
-        {
-            "id": "4001181459",
-            "title": "Backend Python Developer",
-            "description": "Buscamos backend...",
-            "created": "2026-10-17T09:12:34Z",
-            "redirect_url": "https://www.adzuna.es/details/4001181459",
-            "salary_min": 33000,
-            "salary_max": 39000,
-            "salary_is_predicted": "0",
-            "contract_type": "permanent",
-            "contract_time": "full_time",
-            "company": {"display_name": "Acme"},
-            "location": {"display_name": "Madrid", "area": ["España", "Madrid"]},
-            "category": {"label": "IT Jobs", "tag": "it-jobs"},
-        }
-    ],
-}
+CONTRASENA = "contrasena-de-aplicacion-123"
+EMAIL = "alguien@example.com"
 
-CLAVE = "clave-secretisima-123"
+WATCHLISTS_VALIDO = """
+watchlists:
+  - nombre: becas-informatica
+    keywords: [informática, software]
+    secciones: [III, V.B]
+"""
 
 
-def settings_con_credenciales(tmp_path: Path) -> Settings:
-    return Settings(
-        adzuna_app_id="id-secreto-456",
-        adzuna_app_key=CLAVE,
-        profile_path=tmp_path / "profile.yaml",
-        cache_path=tmp_path / "cache.sqlite3",
-    )
+def settings_para_test(tmp_path: Path, **overrides: object) -> Settings:
+    data: dict[str, object] = {
+        "watchlists_path": tmp_path / "watchlists.yaml",
+        "index_path": tmp_path / "indice.sqlite3",
+    }
+    data.update(overrides)
+    return Settings(**data)  # type: ignore[arg-type]
 
 
 # --------------------------------------------------------------------------- #
@@ -69,142 +59,161 @@ def test_la_version_de_python_de_la_suite_es_suficiente():
     assert check_python().status == "ok"
 
 
-def test_avisa_si_falta_el_dotenv(tmp_path: Path):
-    check = check_dotenv(tmp_path)
-    assert check.status == "warn"
-    assert ".env.example" in check.detail
-
-
-def test_detecta_el_dotenv(tmp_path: Path):
-    (tmp_path / ".env").write_text("ADZUNA_APP_ID=x\n", encoding="utf-8")
-    assert check_dotenv(tmp_path).status == "ok"
-
-
-def test_un_perfil_roto_es_un_fallo_no_un_aviso(tmp_path: Path):
-    ruta = tmp_path / "profile.yaml"
-    ruta.write_text("skills: [python\n", encoding="utf-8")
-    settings = Settings(profile_path=ruta, cache_path=tmp_path / "cache.sqlite3")
-    assert check_profile(settings).status == "fail"
-
-
-def test_sin_perfil_solo_avisa(tmp_path: Path):
-    settings = Settings(
-        profile_path=tmp_path / "no-existe.yaml", cache_path=tmp_path / "cache.sqlite3"
-    )
-    check = check_profile(settings)
+def test_sin_watchlists_solo_avisa(tmp_path: Path):
+    check = check_watchlists(settings_para_test(tmp_path))
     assert check.status == "warn"
     assert "fecha" in check.detail
 
 
-def test_el_perfil_se_resume_con_recuentos_no_con_contenidos(tmp_path: Path):
-    ruta = tmp_path / "profile.yaml"
-    ruta.write_text("skills: [python, fastapi]\nseniority: junior\n", encoding="utf-8")
-    settings = Settings(profile_path=ruta, cache_path=tmp_path / "cache.sqlite3")
-    check = check_profile(settings)
+def test_un_watchlists_roto_es_un_fallo_no_un_aviso(tmp_path: Path):
+    ruta = tmp_path / "watchlists.yaml"
+    ruta.write_text("watchlists:\n  - nombre: becas\n    secciones: [XIV]\n", encoding="utf-8")
+    assert check_watchlists(settings_para_test(tmp_path, watchlists_path=ruta)).status == "fail"
+
+
+def test_las_watchlists_se_resumen_con_recuentos_no_con_keywords(tmp_path: Path):
+    ruta = tmp_path / "watchlists.yaml"
+    ruta.write_text(WATCHLISTS_VALIDO, encoding="utf-8")
+
+    check = check_watchlists(settings_para_test(tmp_path, watchlists_path=ruta))
+
     assert check.status == "ok"
-    assert "2 skills" in check.detail
-    # Las tecnologías concretas no se imprimen.
-    assert "fastapi" not in check.detail
+    assert "becas-informatica" in check.detail
+    assert "2 keywords" in check.detail
+    # Las keywords concretas no se imprimen: dicen bastante del usuario.
+    assert "software" not in check.detail
 
 
-# --------------------------------------------------------------------------- #
-# La comprobación real de la API
-# --------------------------------------------------------------------------- #
-
-
-@respx.mock
-def test_check_api_confirma_el_pais_y_los_campos(tmp_path: Path):
-    respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, json=RESPUESTA_ADZUNA))
-
-    checks = check_adzuna_api(settings_con_credenciales(tmp_path))
-
-    assert [check.status for check in checks] == ["ok", "ok"]
-    assert "1234 ofertas" in checks[0].detail
-    assert "'es'" in checks[0].detail
-    assert "redirect_url" in checks[1].detail
-
-
-@respx.mock
-def test_check_api_no_filtra_la_clave_en_la_salida(tmp_path: Path):
-    respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, json=RESPUESTA_ADZUNA))
-
-    checks = check_adzuna_api(settings_con_credenciales(tmp_path))
-
-    for check in checks:
-        assert CLAVE not in check.render()
-        assert "id-secreto-456" not in check.render()
-
-
-@respx.mock
-def test_check_api_manda_el_user_agent_del_proyecto(tmp_path: Path):
-    ruta = respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, json=RESPUESTA_ADZUNA))
-
-    check_adzuna_api(settings_con_credenciales(tmp_path))
-
-    assert ruta.calls.last.request.headers["user-agent"].startswith("convocatorias-mcp/")
-
-
-@respx.mock
-def test_check_api_pide_una_sola_oferta_para_gastar_lo_minimo(tmp_path: Path):
-    ruta = respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, json=RESPUESTA_ADZUNA))
-
-    check_adzuna_api(settings_con_credenciales(tmp_path))
-
-    assert ruta.calls.last.request.url.params["results_per_page"] == "1"
-
-
-@respx.mock
-@pytest.mark.parametrize("status", [401, 403])
-def test_check_api_distingue_credenciales_rechazadas(tmp_path: Path, status: int):
-    respx.get(SEARCH_URL).mock(return_value=httpx.Response(status))
-
-    checks = check_adzuna_api(settings_con_credenciales(tmp_path))
-
-    assert checks[0].status == "fail"
-    assert "credenciales rechazadas" in checks[0].detail
-
-
-@respx.mock
-def test_check_api_explica_un_400_con_html(tmp_path: Path):
-    # Es lo que devuelve Adzuna de verdad cuando algo no cuadra: HTML, no JSON.
-    respx.get(SEARCH_URL).mock(
-        return_value=httpx.Response(400, html="<html>Uh oh, something isn't right</html>")
-    )
-
-    checks = check_adzuna_api(settings_con_credenciales(tmp_path))
-
-    assert checks[0].status == "fail"
-    assert "país 'es'" in checks[0].detail
-
-
-@respx.mock
-def test_check_api_avisa_si_el_pais_no_devuelve_resultados(tmp_path: Path):
-    respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, json={"count": 0, "results": []}))
-
-    checks = check_adzuna_api(settings_con_credenciales(tmp_path))
+def test_un_indice_nuevo_se_crea_y_se_avisa_de_que_esta_vacio(tmp_path: Path):
+    checks = check_index(settings_para_test(tmp_path))
 
     assert checks[0].status == "ok"
     assert checks[1].status == "warn"
-    assert "cobertura" in checks[1].detail
+    assert "ingest" in checks[1].detail
+    assert (tmp_path / "indice.sqlite3").is_file()
+
+
+def test_el_indice_con_contenido_se_resume(tmp_path: Path):
+    ruta = tmp_path / "indice.sqlite3"
+    conn = open_index(ruta)
+    conn.execute(
+        "INSERT INTO source_health (fuente, fecha, estado, items, ingerido_at) "
+        "VALUES ('boe', '2026-10-17', 'ok', 270, '2026-10-19T10:00:00+00:00')"
+    )
+    conn.close()
+
+    checks = check_index(settings_para_test(tmp_path, index_path=ruta))
+
+    assert checks[1].status == "ok"
+    assert "2026-10-17" in checks[1].detail
+
+
+def test_los_huecos_del_indice_se_senalan(tmp_path: Path):
+    ruta = tmp_path / "indice.sqlite3"
+    conn = open_index(ruta)
+    for fecha in ("2026-10-15", "2026-10-19"):
+        conn.execute(
+            "INSERT INTO source_health (fuente, fecha, estado, items, ingerido_at) "
+            "VALUES ('boe', ?, 'ok', 1, '2026-10-19T10:00:00+00:00')",
+            (fecha,),
+        )
+    conn.close()
+
+    checks = check_index(settings_para_test(tmp_path, index_path=ruta))
+
+    huecos = [check for check in checks if check.name == "huecos"]
+    assert huecos and huecos[0].status == "warn"
+    assert "2026-10-16" in huecos[0].detail
+
+
+def test_sin_smtp_solo_avisa(tmp_path: Path):
+    checks = check_smtp(settings_para_test(tmp_path))
+    assert checks[0].status == "warn"
+    assert "fichero" in checks[0].detail
+
+
+def test_smtp_a_medias_es_un_fallo(tmp_path: Path):
+    settings = settings_para_test(tmp_path, smtp_host="smtp.gmail.com", smtp_user="yo@gmail.com")
+    checks = check_smtp(settings)
+    assert any(check.status == "fail" for check in checks)
+
+
+def test_smtp_completo_esta_ok(tmp_path: Path):
+    settings = settings_para_test(
+        tmp_path,
+        smtp_host="smtp.gmail.com",
+        smtp_user="yo@gmail.com",
+        smtp_password=CONTRASENA,
+        digest_to=EMAIL,
+    )
+    checks = check_smtp(settings)
+    assert all(check.status == "ok" for check in checks)
+
+
+def test_la_comprobacion_de_smtp_no_filtra_nada(tmp_path: Path):
+    settings = settings_para_test(
+        tmp_path,
+        smtp_host="smtp.gmail.com",
+        smtp_user="yo@gmail.com",
+        smtp_password=CONTRASENA,
+        digest_to=EMAIL,
+    )
+    salida = "\n".join(check.render() for check in check_smtp(settings))
+    assert CONTRASENA not in salida
+    assert EMAIL not in salida
+    assert "yo@gmail.com" not in salida
+
+
+# --------------------------------------------------------------------------- #
+# Conectividad con el BOE
+# --------------------------------------------------------------------------- #
 
 
 @respx.mock
-def test_check_api_convierte_un_fallo_de_red_en_fallo_legible(tmp_path: Path):
-    respx.get(SEARCH_URL).mock(side_effect=httpx.ConnectTimeout("timeout"))
+def test_check_boe_confirma_que_la_api_responde():
+    respx.get(SUMARIO_URL).mock(return_value=httpx.Response(200, json={"data": {}}))
 
-    checks = check_adzuna_api(settings_con_credenciales(tmp_path))
+    checks = check_boe(hoy=date(2026, 10, 19))
+
+    assert checks[0].status == "ok"
+    assert "HTTP 200" in checks[0].detail
+
+
+@respx.mock
+def test_un_404_del_boe_cuenta_como_exito():
+    # Es lo que pasa un domingo: la API responde y dice que no hubo boletin.
+    respx.get(SUMARIO_URL).mock(return_value=httpx.Response(404, text="<response/>"))
+
+    checks = check_boe(hoy=date(2026, 10, 19))
+
+    assert checks[0].status == "ok"
+    assert "no hubo publicación" in checks[0].detail
+
+
+@respx.mock
+def test_un_5xx_del_boe_si_es_un_fallo():
+    respx.get(SUMARIO_URL).mock(return_value=httpx.Response(503))
+
+    assert check_boe(hoy=date(2026, 10, 19))[0].status == "fail"
+
+
+@respx.mock
+def test_un_fallo_de_red_con_el_boe_se_explica():
+    respx.get(SUMARIO_URL).mock(side_effect=httpx.ConnectTimeout("timeout"))
+
+    checks = check_boe(hoy=date(2026, 10, 19))
 
     assert checks[0].status == "fail"
     assert "fallo de red" in checks[0].detail
 
 
-def test_check_api_se_omite_sin_credenciales(tmp_path: Path):
-    settings = Settings(profile_path=tmp_path / "p.yaml", cache_path=tmp_path / "c.sqlite3")
+@respx.mock
+def test_check_boe_manda_el_user_agent_del_proyecto():
+    ruta = respx.get(SUMARIO_URL).mock(return_value=httpx.Response(200, json={}))
 
-    checks = check_adzuna_api(settings)
+    check_boe(hoy=date(2026, 10, 19))
 
-    assert checks[0].status == "warn"
-    assert "faltan credenciales" in checks[0].detail
+    assert ruta.calls.last.request.headers["user-agent"].startswith("convocatorias-mcp/")
 
 
 # --------------------------------------------------------------------------- #
@@ -212,59 +221,67 @@ def test_check_api_se_omite_sin_credenciales(tmp_path: Path):
 # --------------------------------------------------------------------------- #
 
 
-def test_doctor_sin_nada_configurado_avisa_pero_no_falla(tmp_path: Path, capsys):
-    codigo = run_doctor(cwd=tmp_path)
+@pytest.fixture
+def entorno_limpio(tmp_path: Path, monkeypatch):
+    """Aísla el doctor: índice y watchlists dentro de tmp_path."""
+    monkeypatch.setenv("CONVOCATORIAS_INDEX_PATH", str(tmp_path / "indice.sqlite3"))
+    monkeypatch.setenv("CONVOCATORIAS_WATCHLISTS_PATH", str(tmp_path / "watchlists.yaml"))
+    for clave in ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "DIGEST_TO"):
+        monkeypatch.delenv(clave, raising=False)
+    return tmp_path
+
+
+def test_doctor_sin_nada_configurado_avisa_pero_no_falla(entorno_limpio: Path, capsys):
+    codigo = run_doctor(cwd=entorno_limpio)
 
     salida = capsys.readouterr().out
     assert codigo == 0
     assert "aviso" in salida
-    assert "developer.adzuna.com/signup" in salida
+    assert "ingest" in salida
 
 
-def test_doctor_falla_si_el_perfil_esta_roto(tmp_path: Path, capsys):
-    (tmp_path / "profile.yaml").write_text("skills: [python\n", encoding="utf-8")
+def test_doctor_falla_si_las_watchlists_estan_rotas(entorno_limpio: Path, capsys):
+    (entorno_limpio / "watchlists.yaml").write_text("watchlists: [\n", encoding="utf-8")
 
-    codigo = run_doctor(cwd=tmp_path)
+    codigo = run_doctor(cwd=entorno_limpio)
 
     assert codigo == 1
     assert "impiden funcionar" in capsys.readouterr().out
 
 
-def test_doctor_falla_con_una_configuracion_invalida(tmp_path: Path, capsys, monkeypatch):
-    monkeypatch.setenv("CONVOCATORIAS_CACHE_TTL", "un rato")
+def test_doctor_falla_con_una_configuracion_invalida(entorno_limpio: Path, capsys, monkeypatch):
+    monkeypatch.setenv("CONVOCATORIAS_BACKFILL_DIAS", "tres meses")
 
-    codigo = run_doctor(cwd=tmp_path)
+    codigo = run_doctor(cwd=entorno_limpio)
 
     assert codigo == 1
-    assert "CONVOCATORIAS_CACHE_TTL" in capsys.readouterr().out
+    assert "CONVOCATORIAS_BACKFILL_DIAS" in capsys.readouterr().out
 
 
-def test_doctor_no_sale_a_la_red_sin_check_api(tmp_path: Path, capsys):
-    (tmp_path / ".env").write_text(
-        f"ADZUNA_APP_ID=id-secreto-456\nADZUNA_APP_KEY={CLAVE}\n", encoding="utf-8"
-    )
-
-    # respx sin rutas: cualquier petición HTTP haría fallar el test.
+def test_doctor_no_sale_a_la_red_sin_check_api(entorno_limpio: Path, capsys):
+    # respx sin rutas: cualquier peticion HTTP haria fallar el test.
     with respx.mock:
-        codigo = run_doctor(cwd=tmp_path)
+        codigo = run_doctor(cwd=entorno_limpio)
 
     salida = capsys.readouterr().out
     assert codigo == 0
     assert "--check-api" in salida
 
 
-def test_doctor_nunca_imprime_las_credenciales(tmp_path: Path, capsys):
-    (tmp_path / ".env").write_text(
-        f"ADZUNA_APP_ID=id-secreto-456\nADZUNA_APP_KEY={CLAVE}\n", encoding="utf-8"
+def test_doctor_nunca_imprime_lo_sensible(entorno_limpio: Path, capsys):
+    (entorno_limpio / ".env").write_text(
+        f"SMTP_HOST=smtp.gmail.com\nSMTP_USER=yo@gmail.com\n"
+        f"SMTP_PASSWORD={CONTRASENA}\nDIGEST_TO={EMAIL}\n",
+        encoding="utf-8",
     )
 
-    run_doctor(cwd=tmp_path)
+    run_doctor(cwd=entorno_limpio)
 
     salida = capsys.readouterr().out
-    assert CLAVE not in salida
-    assert "id-secreto-456" not in salida
-    # Pero sí confirma que están puestas, con su longitud.
-    assert f"({len(CLAVE)} caracteres)" in salida
+    assert CONTRASENA not in salida
+    assert EMAIL not in salida
+    # Pero si confirma que estan puestos, con su longitud.
+    assert f"({len(CONTRASENA)} caracteres)" in salida
 
 
 def test_el_parser_acepta_doctor_y_check_api():

@@ -1,37 +1,44 @@
-# Plantilla de perfil para el ranking de afinidad.
+# Plantilla de watchlists.
 #
-#   cp profile.example.yaml profile.yaml   (profile.yaml está en .gitignore)
+#   cp watchlists.example.yaml watchlists.yaml   (watchlists.yaml está en .gitignore)
 #
-# Todos los campos son opcionales. Sin profile.yaml el servidor funciona
-# igual: los resultados se ordenan por fecha de publicación en vez de por
-# afinidad.
+# Cada watchlist es un conjunto de criterios con nombre. Hay varias, y no un
+# perfil único, porque los criterios de una beca de informática no se parecen a
+# los de una vivienda protegida: mezclarlos daría un score sin significado.
+# El digest agrupa por watchlist y los tools MCP aceptan una como filtro.
+#
+# Todo es opcional. Sin watchlists el servidor funciona igual: no puntúa y
+# ordena por fecha de publicación.
+#
+# Comprueba que el fichero es válido con:
+#
+#   convocatorias-mcp doctor
 
-# Tecnologías que dominas. Son las que más puntúan.
-skills:
-  - python
-  - fastapi
-  - postgresql
-  - docker
+watchlists:
+  - nombre: becas-informatica
+    # Se buscan en el título, el departamento y el epígrafe. Sin distinguir
+    # mayúsculas ni acentos: "informática" e "informatica" valen igual.
+    keywords: [informática, software, telecomunicaciones, ingeniería]
+    # Secciones del boletín a vigilar. Vacío o ausente = todas.
+    #   II.B  oposiciones y concursos (empleo público)
+    #   III   otras disposiciones (bases reguladoras de becas y subvenciones)
+    #   V.A   anuncios de licitaciones públicas
+    #   V.B   otros anuncios oficiales (extractos de convocatorias)
+    # Se aceptan tanto "III" como el código interno del BOE, "3".
+    secciones: [III, V.B]
+    # Score mínimo, de 0 a 1, para que una convocatoria entre en esta
+    # watchlist. Súbelo si recibes demasiado ruido.
+    min_score: 0.5
 
-# Tecnologías que te interesan pero no dominas. Puntúan menos.
-nice_to_have:
-  - aws
-  - kubernetes
+  - nombre: empleo-publico-tic
+    keywords: [analista, programador, sistemas]
+    secciones: [II.B]
+    # Ámbitos territoriales aceptables. Vacío o ausente = todos.
+    ambito: [Madrid, Estatal]
 
-# Uno de: intern, junior, mid, senior, lead
-seniority: junior
-
-# Ubicaciones aceptables. "remoto" / "remote" activa el match de teletrabajo.
-locations:
-  - Madrid
-  - remoto
-
-# Uno o varios de: internship, full_time, part_time, freelance, temporary
-contract_types:
-  - internship
-  - full_time
-
-# Si alguno aparece en el título de la oferta, se penaliza fuerte.
-exclude_keywords:
-  - comercial
-  - ventas
+notificacion:
+  # Con cuántos días de antelación avisar de un plazo que se cierra.
+  # Las convocatorias cuyo plazo no se puede determinar se marcan como
+  # desconocido y nunca se cuentan como "vence pronto": inventarse una fecha
+  # sería peor que no tenerla.
+  avisar_plazo_dias: 3

@@ -1,28 +1,32 @@
-"""Contrato que cumple todo portal de empleo, más la infraestructura de
-scraping educado que comparten los adaptadores.
+"""Contrato que cumple todo boletín oficial, más la infraestructura de acceso
+educado que comparten las fuentes.
 
-El punto central del diseño está aquí: :class:`JobSource` define una única
-operación, ``search(filters) -> list[JobListing]``. El aggregator, la caché y
-el servidor MCP solo conocen esta interfaz, así que añadir un portal nuevo es
-crear un fichero en ``sources/``, implementar ``search()`` y registrarlo.
+El punto central del diseño está aquí: :class:`BoletinSource` define una
+operación principal, ``fetch_dia(fecha) -> list[Convocatoria]``. La ingesta, el
+índice y el servidor MCP solo conocen esta interfaz, así que añadir un boletín
+autonómico es crear un fichero, implementar ``fetch_dia()`` y registrarlo.
 
-:class:`PoliteHttpSource` es la clase base para los portales que se consultan
-por HTTP (con o sin API) y centraliza los requisitos no negociables de
-cortesía, para que ningún adaptador pueda olvidarse de uno:
+:class:`PoliteHttpSource` es la clase base para los boletines que se consultan
+por HTTP y centraliza los requisitos de cortesía, para que ninguna fuente pueda
+olvidarse de uno:
 
-* ``robots.txt`` comprobado de verdad antes de cada petición, con caché por host
 * un retardo mínimo entre peticiones al mismo dominio, compartido entre fuentes
 * User-Agent honesto e identificado, nunca disfrazado de navegador
+* ``robots.txt`` comprobado de verdad **en las fuentes que se apoyan en él**
+  (ver :class:`Consentimiento`)
 * todo fallo de red o de HTTP convertido en :class:`SourceError`
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from abc import ABC, abstractmethod
+from datetime import date
+from enum import StrEnum
 from types import TracebackType
-from typing import ClassVar, Literal, Self
+from typing import Any, ClassVar, Literal, Self
 from urllib.parse import urljoin, urlsplit
 from urllib.robotparser import RobotFileParser
 
@@ -30,15 +34,17 @@ import httpx
 from bs4 import BeautifulSoup
 
 from convocatorias_mcp import __version__
-from convocatorias_mcp.models import JobListing, SearchFilters
+from convocatorias_mcp.models import Convocatoria
 
 __all__ = [
     "DEFAULT_MIN_DELAY_SECONDS",
     "DEFAULT_TIMEOUT_SECONDS",
-    "JobSource",
+    "BoletinSource",
+    "Consentimiento",
     "PoliteHttpSource",
     "RateLimiter",
     "RobotsPolicy",
+    "SinPublicacion",
     "SourceError",
     "user_agent",
 ]
@@ -47,11 +53,11 @@ __all__ = [
 #: objetivo: si ``robots.txt`` pide un ``Crawl-delay`` mayor, gana el del sitio.
 DEFAULT_MIN_DELAY_SECONDS = 1.5
 
-DEFAULT_TIMEOUT_SECONDS = 15.0
+DEFAULT_TIMEOUT_SECONDS = 20.0
 
-#: Páginas de resultados que superan este tamaño se consideran sospechosas
-#: (una captcha wall o un error servido con 200) y no se intentan parsear.
-MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+#: Respuestas por encima de este tamaño se consideran sospechosas y no se
+#: intentan parsear. Un sumario del BOE ronda los 300 KB.
+MAX_RESPONSE_BYTES = 20 * 1024 * 1024
 
 
 def user_agent() -> str:
@@ -63,26 +69,80 @@ def user_agent() -> str:
     return f"convocatorias-mcp/{__version__} (+https://github.com/Adrada03/convocatorias-mcp)"
 
 
+class Consentimiento(StrEnum):
+    """De dónde viene el permiso para leer una fuente.
+
+    Es la política de fuentes del proyecto convertida en código. Cada fuente
+    declara su origen de consentimiento y :class:`PoliteHttpSource` solo
+    comprueba ``robots.txt`` cuando ese es el permiso en el que se apoya:
+    ``robots.txt`` se dirige a rastreadores que descubren contenido siguiendo
+    enlaces, y no es el documento que regula a un cliente de una API publicada
+    para terceros ni a un reutilizador de datos abiertos.
+    """
+
+    #: Datos abiertos con licencia de reutilización explícita (el caso del BOE).
+    DATOS_ABIERTOS = "datos_abiertos"
+    #: API documentada para terceros, con o sin credenciales.
+    API_PUBLICA = "api_publica"
+    #: Feed RSS/JSON publicado para ser consumido.
+    FEED_PUBLICO = "feed_publico"
+    #: Sin API ni feed: el permiso es lo que diga ``robots.txt``.
+    ROBOTS = "robots"
+
+    @property
+    def exige_robots(self) -> bool:
+        return self is Consentimiento.ROBOTS
+
+
 class SourceError(Exception):
     """Fallo controlado de una fuente.
 
-    Es la única excepción que un adaptador debe dejar salir de ``search()``.
-    El aggregator la captura por fuente y la traduce a
-    ``source_status[fuente] = "error: ..."``, de modo que una fuente caída
-    nunca rompe la búsqueda completa. La excepción original se conserva en
-    ``__cause__`` y en :attr:`cause` para diagnóstico, pero no se propaga.
+    Es la única excepción que una fuente debe dejar salir, junto con
+    :class:`SinPublicacion`. La ingesta la captura por fuente y por día y la
+    registra como ``EstadoIngesta.ERROR``, de modo que un boletín caído no
+    rompe la ingesta completa. La excepción original se conserva en
+    ``__cause__`` y en :attr:`cause`, pero no se propaga.
     """
 
-    def __init__(self, source: str, message: str, *, cause: BaseException | None = None) -> None:
+    def __init__(
+        self,
+        source: str,
+        message: str,
+        *,
+        cause: BaseException | None = None,
+        status_code: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.source = source
         self.message = message
         self.cause = cause
+        #: Código HTTP, cuando el fallo venía de una respuesta. Permite a una
+        #: fuente distinguir casos como el 404 que el BOE devuelve los días que
+        #: no publica.
+        self.status_code = status_code
         if cause is not None:
             self.__cause__ = cause
 
     def __str__(self) -> str:
         return f"[{self.source}] {self.message}"
+
+
+class SinPublicacion(Exception):
+    """El boletín no publicó ese día. **No es un error.**
+
+    El BOE no publica los domingos ni algunos festivos, y responde 404 a esas
+    fechas. Esa información es válida y hay que registrarla como
+    ``EstadoIngesta.SIN_PUBLICACION``: no debe ensuciar la salud de la fuente ni
+    hacer que la ingesta reintente la fecha para siempre.
+
+    Es una excepción aparte de :class:`SourceError`, y no un valor de retorno,
+    para que no se pueda confundir con "publicó pero no había nada".
+    """
+
+    def __init__(self, source: str, fecha: date) -> None:
+        super().__init__(f"{source} no publicó el {fecha.isoformat()}")
+        self.source = source
+        self.fecha = fecha
 
 
 # --------------------------------------------------------------------------- #
@@ -93,10 +153,9 @@ class SourceError(Exception):
 class RateLimiter:
     """Impone un retardo mínimo entre peticiones al mismo host.
 
-    El estado es de proceso y no de instancia: dos adaptadores que apunten al
-    mismo dominio (o varias búsquedas concurrentes de la misma fuente) deben
-    compartir la cola, que es justo lo que un servidor espera de un cliente
-    educado.
+    El estado es de proceso y no de instancia: dos fuentes que apunten al mismo
+    dominio (o un backfill concurrente) deben compartir la cola, que es lo que
+    un servidor espera de un cliente educado.
     """
 
     _locks: ClassVar[dict[tuple[int, str], asyncio.Lock]] = {}
@@ -221,67 +280,70 @@ class RobotsPolicy:
 # --------------------------------------------------------------------------- #
 
 
-class JobSource(ABC):
-    """Un portal de empleo consultable.
+class BoletinSource(ABC):
+    """Un boletín oficial consultable.
 
-    Implementar un portal nuevo son tres cosas: declarar los metadatos de
-    clase, implementar :meth:`search` y registrar la clase. Nada más; ni el
-    aggregator ni la caché ni el servidor MCP necesitan cambiar.
+    Implementar un boletín nuevo son tres cosas: declarar los metadatos de
+    clase, implementar :meth:`fetch_dia` y registrar la clase. Nada más; ni la
+    ingesta ni el índice ni el servidor MCP necesitan cambiar.
 
-    Contrato que se espera de :meth:`search`:
+    Contrato que se espera de :meth:`fetch_dia`:
 
-    * Devuelve como máximo ``filters.limit_per_source`` ofertas.
-    * Traduce a la query del portal los filtros que este sepa aplicar y deja
-      los demás al aggregator, que vuelve a filtrar con
-      ``SearchFilters.matches``.
-    * Rellena solo los campos que el portal publique de verdad; lo que no
-      encuentre se queda en ``None``, nunca inventado.
-    * Ante cualquier fallo (red, HTML cambiado, bloqueo) lanza
+    * Devuelve las convocatorias publicadas **ese día**, ya normalizadas.
+    * Si el boletín no publicó ese día, lanza :class:`SinPublicacion`. No
+      devuelve una lista vacía, que significaría "publicó y no había nada".
+    * Rellena solo los campos que el boletín publique de verdad; lo que no
+      encuentre se queda en ``None``, nunca inventado. En particular, no deduce
+      un plazo que no esté escrito.
+    * Ante cualquier otro fallo (red, estructura cambiada) lanza
       :class:`SourceError` y nada más: la excepción original va en ``cause``.
-    * Una página de resultados vacía es una lista vacía, no un error.
+    * No descarga textos completos: eso es :meth:`fetch_texto`, bajo demanda.
     """
 
-    #: Identificador corto y estable. Es lo que el usuario escribe en el
-    #: parámetro ``sources`` de los tools MCP y lo que se guarda en la caché.
+    #: Identificador corto y estable. Es lo que el usuario escribe en los tools
+    #: MCP y lo que se guarda en el índice.
     name: ClassVar[str]
 
-    #: Nombre del portal tal y como se le presenta al usuario.
+    #: Nombre del boletín tal y como se le presenta al usuario.
     display_name: ClassVar[str]
 
-    #: Origen del portal, para construir URLs absolutas y consultar robots.txt.
+    #: Origen del boletín, para construir URLs absolutas.
     base_url: ClassVar[str]
 
-    #: Cómo se obtienen los datos. Se publica en la tabla de fuentes del README
-    #: y en la respuesta de ``compare_sources``.
+    #: Cómo se obtienen los datos. Se publica en la tabla de fuentes del README.
     method: ClassVar[Literal["api", "scraping"]]
 
-    #: ``True`` si el portal exige credenciales o alta como partner. Las
-    #: fuentes así se marcan ``skipped`` cuando no hay credenciales en lugar de
-    #: dar error.
-    requires_credentials: ClassVar[bool] = False
+    #: De dónde viene el permiso para leer esta fuente.
+    consentimiento: ClassVar[Consentimiento]
+
+    #: URL de la licencia de reutilización, cuando la fuente publica una.
+    licencia_url: ClassVar[str | None] = None
+
+    #: Cita exacta que la licencia obliga a mostrar, si obliga a alguna. Las
+    #: condiciones de reutilización del BOE, por ejemplo, exigen citar la
+    #: fuente con un enlace a su sede electrónica. Se declara aquí, y no en la
+    #: plantilla del digest o del dashboard, para que cumplirla no dependa de
+    #: que alguien se acuerde: quien añada una fuente la declara una vez y
+    #: todas las salidas la arrastran.
+    cita_requerida: ClassVar[str | None] = None
 
     @abstractmethod
-    async def search(self, filters: SearchFilters) -> list[JobListing]:
-        """Busca ofertas en el portal y las devuelve normalizadas."""
+    async def fetch_dia(self, fecha: date) -> list[Convocatoria]:
+        """Devuelve las convocatorias publicadas por el boletín ese día."""
         raise NotImplementedError
 
-    async def fetch_details(self, listing: JobListing) -> JobListing:
-        """Enriquece una oferta con su descripción completa.
+    async def fetch_texto(self, convocatoria: Convocatoria) -> Convocatoria:
+        """Descarga el texto completo de una convocatoria.
 
-        Por defecto devuelve la oferta tal cual: muchos portales ya dan en la
-        página de resultados todo lo que sabemos extraer, y pedir el detalle
-        tiene un coste en peticiones. Los adaptadores que puedan aportar más lo
-        sobrescriben.
+        Por defecto devuelve la convocatoria tal cual. Es el nivel 2 del
+        matching: el texto íntegro se le da al modelo para que lea los
+        requisitos, porque esa prosa jurídica no se parsea con expresiones
+        regulares.
         """
-        return listing
+        return convocatoria
 
     def is_available(self) -> bool:
-        """``True`` si la fuente se puede consultar en esta instalación.
-
-        El aggregator marca ``skipped`` (no ``error``) las fuentes que
-        devuelvan ``False``, por ejemplo una API cuyas credenciales no están
-        configuradas.
-        """
+        """``True`` si la fuente se puede consultar en esta instalación."""
         return True
 
     async def aclose(self) -> None:
@@ -297,12 +359,12 @@ class JobSource(ABC):
 # --------------------------------------------------------------------------- #
 
 
-class PoliteHttpSource(JobSource):
-    """Base para fuentes que se consultan por HTTP, con cortesía incluida.
+class PoliteHttpSource(BoletinSource):
+    """Base para boletines que se consultan por HTTP, con cortesía incluida.
 
-    Un adaptador que herede de aquí y use :meth:`fetch_soup` o
-    :meth:`fetch_text` cumple sin esfuerzo los requisitos de ``robots.txt``,
-    rate limiting y User-Agent: no hay forma de saltárselos por descuido.
+    Una fuente que herede de aquí y use :meth:`fetch_json`, :meth:`fetch_text`
+    o :meth:`fetch_soup` cumple sin esfuerzo el rate limiting, el User-Agent y
+    —cuando su consentimiento se apoya en él— ``robots.txt``.
     """
 
     def __init__(
@@ -311,13 +373,17 @@ class PoliteHttpSource(JobSource):
         client: httpx.AsyncClient | None = None,
         min_delay: float = DEFAULT_MIN_DELAY_SECONDS,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
-        respect_robots: bool = True,
+        respect_robots: bool | None = None,
     ) -> None:
         self._client = client
         self._owns_client = client is None
         self._timeout = timeout
         self._min_delay = min_delay
-        self._respect_robots = respect_robots
+        # Por defecto, lo que diga el consentimiento declarado por la fuente.
+        # El parámetro existe para los tests y para forzarlo a mano.
+        self._respect_robots = (
+            self.consentimiento.exige_robots if respect_robots is None else respect_robots
+        )
         self._robots = RobotsPolicy()
 
     # --- Cliente HTTP ----------------------------------------------------- #
@@ -356,17 +422,24 @@ class PoliteHttpSource(JobSource):
     # --- Peticiones ------------------------------------------------------- #
 
     def absolute_url(self, path: str) -> str:
-        """Convierte un href relativo del portal en URL absoluta."""
+        """Convierte un href relativo del boletín en URL absoluta."""
         return urljoin(self.base_url, path)
 
-    async def fetch_text(self, url: str, *, params: dict[str, str | int] | None = None) -> str:
-        """Pide una página respetando robots.txt y el rate limit.
+    async def fetch_text(
+        self,
+        url: str,
+        *,
+        params: dict[str, str | int] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> str:
+        """Pide una página respetando el rate limit (y robots.txt si aplica).
 
-        Cualquier problema sale como :class:`SourceError`; esta función no deja
-        escapar excepciones de ``httpx``.
+        Cualquier problema sale como :class:`SourceError`, con el código HTTP en
+        ``status_code`` para que la fuente pueda distinguir casos como el 404 de
+        un día sin publicación.
         """
         if self._respect_robots and not await self._robots_allows(url):
-            raise SourceError(self.name, f"robots.txt no permite rastrear {url}")
+            raise SourceError(self.name, f"robots.txt no permite acceder a {url}")
 
         delay = self._min_delay
         if self._respect_robots:
@@ -377,13 +450,14 @@ class PoliteHttpSource(JobSource):
         await RateLimiter.acquire(urlsplit(url).netloc, delay)
 
         try:
-            response = await self.client.get(url, params=params)
+            response = await self.client.get(url, params=params, headers=headers)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise SourceError(
                 self.name,
-                f"HTTP {exc.response.status_code} al pedir {exc.request.url}",
+                f"HTTP {exc.response.status_code} al pedir {url}",
                 cause=exc,
+                status_code=exc.response.status_code,
             ) from exc
         except httpx.RequestError as exc:
             raise SourceError(self.name, f"fallo de red al pedir {url}: {exc}", cause=exc) from exc
@@ -392,15 +466,37 @@ class PoliteHttpSource(JobSource):
             raise SourceError(self.name, f"respuesta inesperadamente grande desde {url}")
         return response.text
 
-    async def fetch_soup(
-        self, url: str, *, params: dict[str, str | int] | None = None
-    ) -> BeautifulSoup:
-        """Como :meth:`fetch_text`, pero devuelve el HTML ya parseado con lxml."""
-        html = await self.fetch_text(url, params=params)
+    async def fetch_json(self, url: str, *, params: dict[str, str | int] | None = None) -> Any:
+        """Como :meth:`fetch_text`, pero devuelve el JSON ya parseado.
+
+        Pide JSON explícitamente por cabecera. Si la respuesta no es JSON, da
+        :class:`SourceError`: el BOE, por ejemplo, contesta XML en los errores
+        aunque le pidas JSON, y parsear eso a ciegas daría un fallo confuso.
+        """
+        texto = await self.fetch_text(url, params=params, headers={"Accept": "application/json"})
         try:
-            return BeautifulSoup(html, "lxml")
-        except Exception as exc:  # pragma: no cover - lxml roto en la instalación
-            raise SourceError(self.name, f"no se pudo parsear el HTML de {url}", cause=exc) from exc
+            return json.loads(texto)
+        except json.JSONDecodeError as exc:
+            raise SourceError(
+                self.name, f"la respuesta de {url} no es JSON válido", cause=exc
+            ) from exc
+
+    async def fetch_soup(
+        self,
+        url: str,
+        *,
+        params: dict[str, str | int] | None = None,
+        features: str = "lxml",
+    ) -> BeautifulSoup:
+        """Como :meth:`fetch_text`, pero devuelve el documento ya parseado.
+
+        ``features="lxml-xml"`` para los documentos XML de un boletín.
+        """
+        contenido = await self.fetch_text(url, params=params)
+        try:
+            return BeautifulSoup(contenido, features)
+        except Exception as exc:  # pragma: no cover - parser roto en la instalación
+            raise SourceError(self.name, f"no se pudo parsear {url}", cause=exc) from exc
 
     async def _robots_allows(self, url: str) -> bool:
         try:

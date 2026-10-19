@@ -2,14 +2,14 @@
 
     convocatorias-mcp                      arranca el servidor MCP por stdio
     convocatorias-mcp doctor               revisa la instalación
-    convocatorias-mcp doctor --check-api   además hace una petición real a Adzuna
+    convocatorias-mcp doctor --check-api   además comprueba el acceso al BOE
 
 ``doctor`` existe porque este servidor lo lanza Claude Desktop en segundo
 plano: si algo está mal configurado, el usuario solo ve que "no funciona", sin
 mensaje de error en ninguna parte. Este comando es el sitio donde mirar.
 
-Nunca imprime el valor de una credencial, solo si está configurada y cuántos
-caracteres tiene: su salida está pensada para poder pegarse en un issue.
+Nunca imprime credenciales ni datos personales, ni completos ni parciales: la
+salida está pensada para poder pegarse en un issue.
 """
 
 from __future__ import annotations
@@ -17,18 +17,21 @@ from __future__ import annotations
 import argparse
 import sys
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Literal
 
 import httpx
 
 from convocatorias_mcp import __version__
-from convocatorias_mcp.config import ConfigError, Settings, load_profile
+from convocatorias_mcp.config import ConfigError, Settings, hoy_boletin, load_watchlists
+from convocatorias_mcp.db import IndexSchemaError, estado_del_indice, open_index
+from convocatorias_mcp.models import Watchlist
 from convocatorias_mcp.sources.base import DEFAULT_TIMEOUT_SECONDS, user_agent
 
 __all__ = ["main"]
 
-ADZUNA_API_BASE = "https://api.adzuna.com/v1/api"
+BOE_SUMARIO_URL = "https://www.boe.es/datosabiertos/api/boe/sumario"
 
 Status = Literal["ok", "warn", "fail"]
 
@@ -65,158 +68,152 @@ def check_dotenv(cwd: Path) -> Check:
     return Check(
         ".env",
         "warn",
-        f"no hay {path}; copia .env.example a .env si quieres usar Adzuna",
+        f"no hay {path}; copia .env.example a .env si quieres el digest por email",
     )
 
 
-def check_adzuna_credentials(settings: Settings) -> list[Check]:
-    checks = [
-        Check(
-            "ADZUNA_APP_ID",
-            "ok" if settings.adzuna_app_id else "warn",
-            settings.describe_secret("adzuna_app_id"),
-        ),
-        Check(
-            "ADZUNA_APP_KEY",
-            "ok" if settings.adzuna_app_key else "warn",
-            settings.describe_secret("adzuna_app_key"),
-        ),
-        Check("ADZUNA_COUNTRY", "ok", settings.adzuna_country),
-    ]
-    if not settings.has_adzuna_credentials:
-        checks.append(
-            Check(
-                "Adzuna",
-                "warn",
-                "sin credenciales la fuente se marcará como 'skipped'; "
-                "regístrate gratis en https://developer.adzuna.com/signup",
+def check_watchlists(settings: Settings) -> Check:
+    try:
+        config = load_watchlists(settings.watchlists_path)
+    except ConfigError as exc:
+        return Check("watchlists.yaml", "fail", str(exc))
+
+    if config is None:
+        return Check(
+            "watchlists.yaml",
+            "warn",
+            f"no hay {settings.watchlists_path}; se ordenará por fecha y no se puntuará",
+        )
+    if config.is_empty:
+        return Check(
+            "watchlists.yaml", "warn", f"{settings.watchlists_path} no define ninguna watchlist"
+        )
+
+    # Los nombres de las watchlists los eligió el usuario y no son secretos,
+    # pero sus keywords pueden decir bastante de él: se cuentan, no se listan.
+    resumen = ", ".join(
+        f"{watchlist.nombre} ({_plural(len(watchlist.keywords), 'keyword', 'keywords')}, "
+        f"{_secciones(watchlist)})"
+        for watchlist in config.watchlists
+    )
+    return Check("watchlists.yaml", "ok", f"{len(config.watchlists)}: {resumen}")
+
+
+def _plural(cantidad: int, singular: str, plural: str) -> str:
+    return f"{cantidad} {singular if cantidad == 1 else plural}"
+
+
+def _secciones(watchlist: Watchlist) -> str:
+    if watchlist.vigila_todas_las_secciones:
+        return "todas las secciones"
+    return _plural(len(watchlist.secciones), "sección", "secciones")
+
+
+def check_index(settings: Settings) -> list[Check]:
+    try:
+        conn = open_index(settings.index_path)
+    except IndexSchemaError as exc:
+        return [Check("índice", "fail", str(exc))]
+    except OSError as exc:
+        return [Check("índice", "fail", f"no se puede abrir {settings.index_path}: {exc}")]
+
+    try:
+        estado = estado_del_indice(conn)
+    finally:
+        conn.close()
+
+    checks = [Check("índice", "ok", f"{settings.index_path}")]
+    if estado.esta_vacio:
+        checks.append(Check("contenido del índice", "warn", estado.resumen()))
+    else:
+        nivel: Status = "warn" if (estado.huecos or estado.dias_con_error) else "ok"
+        checks.append(Check("contenido del índice", nivel, estado.resumen()))
+        if estado.huecos:
+            muestra = ", ".join(dia.isoformat() for dia in estado.huecos[:5])
+            resto = f" y {len(estado.huecos) - 5} más" if len(estado.huecos) > 5 else ""
+            checks.append(
+                Check(
+                    "huecos",
+                    "warn",
+                    f"{muestra}{resto}; 'convocatorias-mcp ingest' los rellena",
+                )
             )
+    return checks
+
+
+def check_smtp(settings: Settings) -> list[Check]:
+    configurado_algo = any(
+        (settings.smtp_host, settings.smtp_user, settings.smtp_password, settings.digest_to)
+    )
+    if not configurado_algo:
+        return [
+            Check(
+                "SMTP",
+                "warn",
+                "sin configurar; el digest se escribirá a fichero en vez de enviarse",
+            )
+        ]
+
+    def estado(valor: object) -> Status:
+        return "ok" if valor else "fail"
+
+    checks = [
+        Check("SMTP_HOST", estado(settings.smtp_host), settings.describe_secret("smtp_host")),
+        Check("SMTP_PORT", "ok", str(settings.smtp_port)),
+        Check("SMTP_USER", estado(settings.smtp_user), settings.describe_secret("smtp_user")),
+        Check(
+            "SMTP_PASSWORD",
+            estado(settings.smtp_password),
+            settings.describe_secret("smtp_password"),
+        ),
+        Check("DIGEST_TO", estado(settings.digest_to), settings.describe_secret("digest_to")),
+    ]
+    if not settings.has_smtp:
+        checks.append(
+            Check("SMTP", "fail", "configurado a medias; faltan valores para poder enviar")
         )
     return checks
 
 
-def check_profile(settings: Settings) -> Check:
-    try:
-        profile = load_profile(settings.profile_path)
-    except ConfigError as exc:
-        return Check("profile.yaml", "fail", str(exc))
+def check_boe(*, timeout: float = DEFAULT_TIMEOUT_SECONDS, hoy: date | None = None) -> list[Check]:
+    """Comprueba que la API del BOE responde.
 
-    if profile is None:
-        return Check(
-            "profile.yaml",
-            "warn",
-            f"no hay {settings.profile_path}; se ordenará por fecha en vez de por afinidad",
-        )
-    if profile.is_empty:
-        return Check("profile.yaml", "warn", f"{settings.profile_path} no define nada útil")
-
-    # Se informan recuentos, no contenidos: la salida es pegable en un issue.
-    resumen = (
-        f"{len(profile.skills)} skills, {len(profile.nice_to_have)} nice-to-have, "
-        f"{len(profile.locations)} ubicaciones, seniority={profile.seniority or 'sin definir'}"
-    )
-    return Check("profile.yaml", "ok", f"{settings.profile_path} ({resumen})")
-
-
-def check_cache(settings: Settings) -> Check:
-    path = settings.cache_path
-    parent = path.parent
-    try:
-        parent.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        return Check("caché", "fail", f"no se puede crear {parent}: {exc}")
-
-    probe = parent / ".convocatorias-write-test"
-    try:
-        probe.write_text("ok", encoding="utf-8")
-        probe.unlink()
-    except OSError as exc:
-        return Check("caché", "fail", f"{parent} no es escribible: {exc}")
-
-    estado = "existe" if path.is_file() else "se creará al primer uso"
-    return Check("caché", "ok", f"{path} ({estado}), TTL {settings.cache_ttl_seconds}s")
-
-
-def check_adzuna_api(
-    settings: Settings, *, timeout: float = DEFAULT_TIMEOUT_SECONDS
-) -> list[Check]:
-    """Hace una petición real a Adzuna y comprueba que el país responde.
-
-    Es el único sitio del proyecto que gasta cuota de la API a propósito: una
-    petición con ``results_per_page=1``, la más barata posible.
+    Un 404 cuenta como éxito: significa que la API contesta y que ese día no
+    hubo publicación, que es exactamente lo que pasa los domingos. Solo un
+    error de red o un 5xx indican un problema.
     """
-    if not settings.has_adzuna_credentials:
-        return [Check("Adzuna /search", "warn", "omitido: faltan credenciales")]
-
-    country = settings.adzuna_country
-    url = f"{ADZUNA_API_BASE}/jobs/{country}/search/1"
-    params = {
-        "app_id": settings.adzuna_app_id or "",
-        "app_key": settings.adzuna_app_key or "",
-        "what": "python",
-        "results_per_page": 1,
-        "content-type": "application/json",
-    }
+    fecha = hoy or hoy_boletin()
+    url = f"{BOE_SUMARIO_URL}/{fecha.strftime('%Y%m%d')}"
 
     try:
         response = httpx.get(
             url,
-            params=params,
             timeout=timeout,
             follow_redirects=True,
             headers={"User-Agent": user_agent(), "Accept": "application/json"},
         )
     except httpx.RequestError as exc:
-        return [Check("Adzuna /search", "fail", f"fallo de red: {exc}")]
+        return [Check("API del BOE", "fail", f"fallo de red: {exc}")]
 
-    # La URL nunca se imprime: lleva las credenciales en la query.
-    etiqueta = f"Adzuna /jobs/{country}/search"
-
-    if response.status_code in (401, 403):
-        return [Check(etiqueta, "fail", f"HTTP {response.status_code}: credenciales rechazadas")]
-    if response.status_code != 200:
-        # Sin credenciales válidas la API responde HTML, no JSON: merece un
-        # mensaje propio porque el cuerpo no se puede parsear.
-        tipo = response.headers.get("content-type", "desconocido")
+    if response.status_code == 200:
         return [
             Check(
-                etiqueta,
-                "fail",
-                f"HTTP {response.status_code} ({tipo}); "
-                f"¿existe el país '{country}' y son correctas las credenciales?",
+                "API del BOE",
+                "ok",
+                f"sumario del {fecha.isoformat()}: HTTP 200, {len(response.content):,} bytes",
             )
         ]
-
-    try:
-        data = response.json()
-    except ValueError:
-        return [Check(etiqueta, "fail", "HTTP 200 pero la respuesta no es JSON")]
-
-    resultados = data.get("results") or []
-    checks = [
-        Check(
-            etiqueta,
-            "ok",
-            f"HTTP 200, {data.get('count', '?')} ofertas para 'python' en '{country}'",
-        )
-    ]
-    if resultados:
-        checks.append(
+    if response.status_code == 404:
+        return [
             Check(
-                "Campos devueltos",
+                "API del BOE",
                 "ok",
-                ", ".join(sorted(resultados[0].keys())),
+                f"responde correctamente; el {fecha.isoformat()} no hubo publicación",
             )
-        )
-    else:
-        checks.append(
-            Check(
-                "Campos devueltos",
-                "warn",
-                f"la respuesta no trae resultados; '{country}' puede no tener cobertura",
-            )
-        )
-    return checks
+        ]
+    return [
+        Check("API del BOE", "fail", f"HTTP {response.status_code} al pedir el sumario del {fecha}")
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -241,18 +238,18 @@ def run_doctor(*, check_api: bool = False, cwd: Path | None = None) -> int:
         print("\nHay 1 problema que impide continuar.")
         return 1
 
-    checks.extend(check_adzuna_credentials(settings))
-    checks.append(check_profile(settings))
-    checks.append(check_cache(settings))
+    checks.append(check_watchlists(settings))
+    checks.extend(check_index(settings))
+    checks.extend(check_smtp(settings))
 
     if check_api:
-        checks.extend(check_adzuna_api(settings))
+        checks.extend(check_boe())
     else:
         checks.append(
             Check(
-                "Adzuna /search",
+                "API del BOE",
                 "warn",
-                "no comprobado; usa --check-api para probarlo de verdad",
+                "no comprobada; usa --check-api para probar la conectividad",
             )
         )
 
@@ -275,23 +272,26 @@ def run_doctor(*, check_api: bool = False, cwd: Path | None = None) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="convocatorias-mcp",
-        description="Servidor MCP de búsqueda agregada de ofertas de empleo.",
+        description=(
+            "Servidor MCP que vigila los boletines oficiales españoles y encuentra "
+            "convocatorias que encajan con tu perfil."
+        ),
     )
     parser.add_argument("--version", action="version", version=f"convocatorias-mcp {__version__}")
     subparsers = parser.add_subparsers(dest="command")
 
     doctor = subparsers.add_parser(
         "doctor",
-        help="Revisa la instalación: credenciales, perfil, caché y acceso a la API.",
+        help="Revisa la instalación: watchlists, índice, SMTP y acceso al BOE.",
         description=(
-            "Revisa la instalación. Sin --check-api no sale a la red, así que no "
-            "gasta cuota. Nunca imprime el valor de una credencial."
+            "Revisa la instalación. Sin --check-api no sale a la red. Nunca imprime "
+            "credenciales ni datos personales."
         ),
     )
     doctor.add_argument(
         "--check-api",
         action="store_true",
-        help="Hace una petición real a Adzuna (gasta 1 de las 250 diarias).",
+        help="Comprueba de verdad que la API del BOE responde.",
     )
     return parser
 

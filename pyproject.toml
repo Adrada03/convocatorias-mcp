@@ -28,6 +28,9 @@ dependencies = [
   "lxml>=5.2",
   "pyyaml>=6.0",
   "python-dotenv>=1.0",
+  # zoneinfo no trae la base de datos IANA en Windows: Europe/Madrid
+  # no existiria sin esto.
+  "tzdata; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

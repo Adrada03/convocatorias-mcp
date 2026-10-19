@@ -1,14 +1,15 @@
-# Perfil del usuario: datos personales, nunca se versiona
-profile.yaml
+# Watchlists del usuario: datos personales, nunca se versionan
+watchlists.yaml
 
-# Credenciales de API. Nunca al repo.
+# Credenciales de SMTP. Nunca al repo.
 .env
 .env.local
 
-# Caché y exportaciones locales
+# Índice local y exportaciones
 *.db
 *.sqlite3
 dashboard/data.json
+digest-*.html
 
 # Python
 __pycache__/
