@@ -1,0 +1,27 @@
+# Perfil del usuario: datos personales, nunca se versiona
+profile.yaml
+
+# Caché y exportaciones locales
+*.db
+*.sqlite3
+dashboard/data.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Editores / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

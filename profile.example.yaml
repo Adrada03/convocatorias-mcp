@@ -1,0 +1,37 @@
+# Plantilla de perfil para el ranking de afinidad.
+#
+#   cp profile.example.yaml profile.yaml   (profile.yaml está en .gitignore)
+#
+# Todos los campos son opcionales. Sin profile.yaml el servidor funciona
+# igual: los resultados se ordenan por fecha de publicación en vez de por
+# afinidad.
+
+# Tecnologías que dominas. Son las que más puntúan.
+skills:
+  - python
+  - fastapi
+  - postgresql
+  - docker
+
+# Tecnologías que te interesan pero no dominas. Puntúan menos.
+nice_to_have:
+  - aws
+  - kubernetes
+
+# Uno de: intern, junior, mid, senior, lead
+seniority: junior
+
+# Ubicaciones aceptables. "remoto" / "remote" activa el match de teletrabajo.
+locations:
+  - Madrid
+  - remoto
+
+# Uno o varios de: internship, full_time, part_time, freelance, temporary
+contract_types:
+  - internship
+  - full_time
+
+# Si alguno aparece en el título de la oferta, se penaliza fuerte.
+exclude_keywords:
+  - comercial
+  - ventas
