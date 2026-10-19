@@ -24,6 +24,7 @@ from convocatorias_mcp.cli import (
     check_watchlists,
     main,
     run_doctor,
+    run_ingest,
 )
 from convocatorias_mcp.config import Settings
 from convocatorias_mcp.db import open_index
@@ -290,8 +291,54 @@ def test_el_parser_acepta_doctor_y_check_api():
     assert args.check_api is True
 
 
-def test_sin_subcomando_avisa_de_que_el_servidor_no_esta_listo(capsys):
-    codigo = main([])
+def test_sin_subcomando_se_arranca_el_servidor_mcp(monkeypatch):
+    # Es como lo invoca Claude Desktop. No se arranca de verdad: el transporte
+    # stdio se quedaria esperando mensajes.
+    arrancado = []
+    monkeypatch.setattr(
+        "convocatorias_mcp.server.main", lambda: arrancado.append(True) or 0, raising=True
+    )
 
-    assert codigo == 2
-    assert "doctor" in capsys.readouterr().err
+    assert main([]) == 0
+    assert arrancado == [True]
+
+
+def test_el_parser_acepta_ingest_con_sus_opciones():
+    args = build_parser().parse_args(["ingest", "--backfill", "30", "--forzar"])
+    assert args.command == "ingest"
+    assert args.backfill == 30
+    assert args.forzar is True
+
+
+# --------------------------------------------------------------------------- #
+# El comando ingest
+# --------------------------------------------------------------------------- #
+
+
+def test_ingest_puebla_el_indice(entorno_limpio: Path, capsys):
+    codigo = run_ingest(backfill=30)
+
+    salida = capsys.readouterr().out
+    assert codigo == 0
+    assert "270 convocatorias" in salida
+    assert "sin publicación" in salida
+    assert (entorno_limpio / "indice.sqlite3").is_file()
+
+
+def test_ingest_es_incremental_en_la_segunda_pasada(entorno_limpio: Path, capsys):
+    run_ingest(backfill=30)
+    capsys.readouterr()
+
+    codigo = run_ingest(backfill=30)
+
+    salida = capsys.readouterr().out
+    assert codigo == 0
+    assert "0 convocatorias de 0 días pedidos" in salida
+    assert "días ya ingeridos" in salida
+
+
+def test_ingest_avisa_de_una_configuracion_invalida(entorno_limpio: Path, capsys, monkeypatch):
+    monkeypatch.setenv("CONVOCATORIAS_BACKFILL_DIAS", "un mes")
+
+    assert run_ingest() == 1
+    assert "Configuración inválida" in capsys.readouterr().err

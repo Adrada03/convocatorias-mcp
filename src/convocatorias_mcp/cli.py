@@ -3,6 +3,7 @@
     convocatorias-mcp                      arranca el servidor MCP por stdio
     convocatorias-mcp doctor               revisa la instalación
     convocatorias-mcp doctor --check-api   además comprueba el acceso al BOE
+    convocatorias-mcp ingest               puebla el índice local
 
 ``doctor`` existe porque este servidor lo lanza Claude Desktop en segundo
 plano: si algo está mal configurado, el usuario solo ve que "no funciona", sin
@@ -15,9 +16,10 @@ salida está pensada para poder pegarse en un issue.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -26,8 +28,10 @@ import httpx
 from convocatorias_mcp import __version__
 from convocatorias_mcp.config import ConfigError, Settings, hoy_boletin, load_watchlists
 from convocatorias_mcp.db import IndexSchemaError, estado_del_indice, open_index
+from convocatorias_mcp.ingest import ingerir
 from convocatorias_mcp.models import Watchlist
 from convocatorias_mcp.sources.base import DEFAULT_TIMEOUT_SECONDS, user_agent
+from convocatorias_mcp.sources.fixture import FixtureSource
 
 __all__ = ["main"]
 
@@ -269,6 +273,43 @@ def run_doctor(*, check_api: bool = False, cwd: Path | None = None) -> int:
     return 0
 
 
+def run_ingest(*, backfill: int | None = None, forzar: bool = False) -> int:
+    """Puebla el índice local. Devuelve 0 si fue bien, 1 si hubo errores.
+
+    De momento la única fuente registrada es ``FixtureSource``, que lee
+    sumarios guardados en disco: sirve para probar el servidor MCP end-to-end
+    sin red. La fuente real del BOE llega en el paso siguiente.
+    """
+    try:
+        settings = Settings.from_env()
+    except ConfigError as exc:
+        print(f"Configuración inválida: {exc}", file=sys.stderr)
+        return 1
+
+    dias = backfill if backfill is not None else settings.backfill_dias
+    hasta = hoy_boletin()
+    desde = hasta - timedelta(days=dias - 1)
+
+    source = FixtureSource()
+    if not source.is_available():
+        print(f"La fuente {source.name} no está disponible.", file=sys.stderr)
+        return 1
+
+    print(f"Ingiriendo {source.display_name}: {desde.isoformat()} a {hasta.isoformat()}")
+    conn = open_index(settings.index_path)
+    try:
+        resumen = asyncio.run(ingerir(conn, source, desde=desde, hasta=hasta, forzar=forzar))
+        estado = estado_del_indice(conn)
+    finally:
+        conn.close()
+
+    print(resumen.resumen())
+    for fecha, detalle in resumen.errores:
+        print(f"  error en {fecha.isoformat()}: {detalle}", file=sys.stderr)
+    print(f"Índice: {estado.resumen()}")
+    return 1 if resumen.errores else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="convocatorias-mcp",
@@ -293,6 +334,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Comprueba de verdad que la API del BOE responde.",
     )
+    ingest = subparsers.add_parser(
+        "ingest",
+        help="Puebla el índice local con los sumarios que falten.",
+        description=(
+            "Descarga los sumarios de las fechas que falten y los guarda en el índice. "
+            "Es incremental: las fechas ya resueltas no se vuelven a pedir."
+        ),
+    )
+    ingest.add_argument(
+        "--backfill",
+        type=int,
+        metavar="N",
+        help="Días hacia atrás a ingerir (por defecto, los de la configuración).",
+    )
+    ingest.add_argument(
+        "--forzar",
+        action="store_true",
+        help="Repite también las fechas ya ingeridas.",
+    )
     return parser
 
 
@@ -308,13 +368,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "doctor":
         return run_doctor(check_api=args.check_api)
 
-    # Sin subcomando se arranca el servidor MCP, que todavía no existe.
-    print(
-        "El servidor MCP aún no está implementado.\n"
-        "Mientras tanto, 'convocatorias-mcp doctor' revisa la instalación.",
-        file=sys.stderr,
-    )
-    return 2
+    if args.command == "ingest":
+        return run_ingest(backfill=args.backfill, forzar=args.forzar)
+
+    # Sin subcomando se arranca el servidor MCP por stdio, que es como lo
+    # invoca Claude Desktop. A partir de aqui stdout pertenece al protocolo.
+    from convocatorias_mcp.server import main as server_main
+
+    return server_main()
 
 
 if __name__ == "__main__":  # pragma: no cover

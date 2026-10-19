@@ -1,0 +1,287 @@
+"""Servidor MCP por transporte stdio.
+
+Expone el índice local como tools para Claude. El reparto de trabajo es el del
+matching en dos niveles: estos tools hacen el filtro barato y determinista
+(nivel 1) y le entregan al modelo el texto oficial para que lea los requisitos
+(nivel 2).
+
+Las descripciones de los tools están escritas para que un modelo elija bien
+cuándo usar cada uno y qué parámetros pasar. En MCP eso es parte del oficio, no
+cosmética: una descripción vaga se traduce en llamadas inútiles.
+
+**Nada se escribe en stdout.** El transporte stdio usa stdout para el protocolo,
+así que un ``print`` suelto rompería la sesión. Los avisos van a stderr.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import date
+from typing import Any
+
+from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
+
+from convocatorias_mcp import __version__
+from convocatorias_mcp.config import Settings, hoy_boletin
+from convocatorias_mcp.db import estado_del_indice, open_index
+from convocatorias_mcp.index import buscar, obtener_convocatoria
+from convocatorias_mcp.models import AVISO_NO_ELEGIBILIDAD, Convocatoria, SearchFilters, Seccion
+from convocatorias_mcp.sources.fixture import FixtureSource
+
+__all__ = ["construir_servidor", "main"]
+
+CITA_BOE = "Fuente de los datos: Agencia Estatal Boletín Oficial del Estado (https://www.boe.es)"
+
+INSTRUCCIONES = f"""
+Vigila los boletines oficiales españoles y encuentra convocatorias: becas,
+ayudas, empleo público y subvenciones.
+
+{AVISO_NO_ELEGIBILIDAD}
+
+Flujo recomendado: busca candidatas con search_convocatorias y, cuando una
+parezca encajar, pide get_convocatoria para leer sus requisitos en el texto
+oficial. No afirmes que la persona cumple o no cumple: resume lo que pide la
+convocatoria, señala coincidencias y discrepancias con lo que sepas de su
+perfil, y enlaza siempre al texto oficial.
+""".strip()
+
+SOLO_LECTURA = ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False)
+
+
+@contextmanager
+def _indice(settings: Settings) -> Iterator[sqlite3.Connection]:
+    """Abre el índice para una sola llamada.
+
+    Una conexión por llamada en vez de una compartida: SQLite ata su conexión al
+    hilo que la crea, y abrir un fichero local es barato.
+    """
+    conn = open_index(settings.index_path)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _resumir(convocatoria: Convocatoria) -> dict[str, Any]:
+    """Convierte una convocatoria en el dicto que ve el modelo.
+
+    Se devuelven los metadatos y los enlaces, nunca el texto completo: para eso
+    está ``get_convocatoria``, y meterlo aquí llenaría la respuesta de prosa
+    jurídica que el modelo no ha pedido todavía.
+    """
+    return {
+        "id": convocatoria.id,
+        "identificador_oficial": convocatoria.identificador,
+        "titulo": convocatoria.titulo,
+        "fecha_publicacion": convocatoria.fecha_publicacion.isoformat(),
+        "seccion": convocatoria.seccion.value,
+        "seccion_descripcion": convocatoria.seccion.descripcion,
+        "departamento": convocatoria.departamento,
+        "epigrafe": convocatoria.epigrafe,
+        "ambito": convocatoria.ambito,
+        "plazo_fin": convocatoria.plazo_fin.isoformat() if convocatoria.plazo_fin else None,
+        "plazo": (
+            "desconocido (no se ha podido determinar; consulta el texto oficial)"
+            if convocatoria.plazo_desconocido
+            else convocatoria.plazo_fin.isoformat()
+            if convocatoria.plazo_fin
+            else "sin plazo de cierre"
+        ),
+        "estado": convocatoria.estado.value,
+        "watchlists": convocatoria.watchlists,
+        "score": convocatoria.score,
+        "url_oficial": convocatoria.url_html,
+        "url_pdf": convocatoria.url_pdf,
+    }
+
+
+def construir_servidor(settings: Settings | None = None) -> MCPServer:
+    """Monta el servidor con sus tools. Separado de :func:`main` para los tests."""
+    ajustes = settings or Settings.from_env()
+    server = MCPServer(
+        name="convocatorias",
+        title="Convocatorias oficiales",
+        version=__version__,
+        instructions=INSTRUCCIONES,
+    )
+
+    @server.tool(
+        name="search_convocatorias",
+        title="Buscar convocatorias",
+        annotations=SOLO_LECTURA,
+    )
+    def search_convocatorias(
+        keywords: str | None = None,
+        seccion: str | None = None,
+        desde: date | None = None,
+        hasta: date | None = None,
+        ambito: str | None = None,
+        include_vistas: bool = False,
+        limite: int = 25,
+    ) -> dict[str, Any]:
+        """Busca convocatorias en el índice local de boletines oficiales.
+
+        Úsalo para preguntas como "¿hay becas de informática?", "¿qué ha salido
+        esta semana?" u "oposiciones de programador en Madrid". Devuelve
+        metadatos y enlaces, no el texto completo: para leer los requisitos de
+        una convocatoria concreta, llama después a get_convocatoria.
+
+        Todos los filtros son opcionales; sin ninguno devuelve lo más reciente.
+
+        Args:
+            keywords: Palabras que deben aparecer TODAS en el título. Sin
+                distinguir mayúsculas ni acentos. Usa términos como los
+                escribiría un boletín oficial ("informática", "subvenciones",
+                "funcionarios"), no lenguaje coloquial.
+            seccion: Sección del boletín. Las que traen convocatorias son
+                "II.B" (oposiciones y concursos), "III" (bases reguladoras de
+                becas y subvenciones), "V.A" (licitaciones públicas) y "V.B"
+                (otros anuncios oficiales). Omítela si no estás seguro.
+            desde: Fecha de publicación mínima, en formato AAAA-MM-DD.
+            hasta: Fecha de publicación máxima, en formato AAAA-MM-DD.
+            ambito: Ámbito territorial, por ejemplo "Estatal" o "Madrid". Solo
+                filtra cuando el boletín lo publica, así que puede descartar
+                convocatorias cuyo ámbito no se ha podido determinar.
+            include_vistas: Por defecto se omiten las ya enviadas en un digest.
+                Ponlo a true si el usuario quiere revisar también esas.
+            limite: Máximo de resultados, entre 1 y 200.
+        """
+        filtros = SearchFilters(
+            keywords=keywords,
+            seccion=Seccion.from_text(seccion) if seccion else None,
+            desde=desde,
+            hasta=hasta,
+            ambito=ambito,
+            include_vistas=include_vistas,
+            limite=limite,
+        )
+        with _indice(ajustes) as conn:
+            resultados = buscar(conn, filtros)
+            estado = estado_del_indice(conn)
+
+        respuesta: dict[str, Any] = {
+            "total": len(resultados),
+            "resultados": [_resumir(convocatoria) for convocatoria in resultados],
+            "aviso": AVISO_NO_ELEGIBILIDAD,
+            "cita_obligatoria": CITA_BOE,
+        }
+        # Se mira si hay convocatorias, no si hay dias registrados: un indice
+        # con datos pero sin registro de ingesta no esta vacio, y decirle al
+        # modelo que lo esta le haria afirmar que no existe nada.
+        if estado.convocatorias == 0:
+            respuesta["indice_vacio"] = (
+                "El índice local está vacío: no hay nada que buscar todavía. "
+                "El usuario tiene que ejecutar 'convocatorias-mcp ingest' para poblarlo."
+            )
+        # Que el modelo sepa hasta dónde llega el índice evita que afirme que
+        # "no hay nada" cuando lo que pasa es que falta ingerir.
+        cubre_hasta = estado.ultima_fecha or estado.ultima_publicacion
+        if cubre_hasta:
+            respuesta["indice_cubre_hasta"] = cubre_hasta.isoformat()
+        return respuesta
+
+    @server.tool(
+        name="get_convocatoria",
+        title="Leer una convocatoria",
+        annotations=SOLO_LECTURA,
+    )
+    def get_convocatoria(id: str) -> dict[str, Any]:
+        """Devuelve una convocatoria concreta con su texto oficial si está descargado.
+
+        Llámalo cuando una convocatoria de search_convocatorias parezca encajar y
+        haga falta leer sus requisitos: plazos, titulación, renta, méritos. Esos
+        requisitos vienen en prosa jurídica y hay que leerlos, no deducirlos del
+        título.
+
+        Al resumirlos: di qué pide la convocatoria, señala qué coincide y qué no
+        con el perfil del usuario, y enlaza al texto oficial. No afirmes que
+        cumple los requisitos; esa conclusión no es tuya.
+
+        Args:
+            id: El campo "id" de un resultado de search_convocatorias, con el
+                formato "boe:BOE-A-2026-21635".
+        """
+        with _indice(ajustes) as conn:
+            convocatoria = obtener_convocatoria(conn, id)
+
+        if convocatoria is None:
+            return {
+                "encontrada": False,
+                "error": (
+                    f"No hay ninguna convocatoria con id {id!r} en el índice local. "
+                    "Comprueba el id con search_convocatorias."
+                ),
+            }
+
+        respuesta = _resumir(convocatoria)
+        respuesta["encontrada"] = True
+        respuesta["aviso"] = AVISO_NO_ELEGIBILIDAD
+        respuesta["cita_obligatoria"] = CITA_BOE
+        if convocatoria.texto_descargado:
+            respuesta["texto_completo"] = convocatoria.texto_completo
+        else:
+            respuesta["texto_completo"] = None
+            respuesta["nota_texto"] = (
+                "El texto completo todavía no está descargado en el índice. "
+                f"Lee la convocatoria en {convocatoria.url_html} antes de resumir "
+                "sus requisitos, y no los deduzcas del título."
+            )
+        return respuesta
+
+    @server.tool(
+        name="source_health",
+        title="Estado del índice y las fuentes",
+        annotations=SOLO_LECTURA,
+    )
+    def source_health() -> dict[str, Any]:
+        """Informa de hasta dónde llega el índice local y si hay huecos.
+
+        Úsalo cuando una búsqueda no devuelva nada y haya que distinguir "no hay
+        convocatorias que encajen" de "el índice no tiene esas fechas", o cuando
+        el usuario pregunte si los datos están al día.
+        """
+        with _indice(ajustes) as conn:
+            estado = estado_del_indice(conn)
+
+        return {
+            "convocatorias_indexadas": estado.convocatorias,
+            "dias_registrados": estado.dias_registrados,
+            "dias_con_publicacion": estado.dias_ok,
+            "dias_sin_publicacion": estado.dias_sin_publicacion,
+            "dias_con_error": estado.dias_con_error,
+            "primera_fecha": (estado.primera_fecha.isoformat() if estado.primera_fecha else None),
+            "ultima_fecha_comprobada": (
+                estado.ultima_fecha.isoformat() if estado.ultima_fecha else None
+            ),
+            "ultima_publicacion_indexada": (
+                estado.ultima_publicacion.isoformat() if estado.ultima_publicacion else None
+            ),
+            "huecos": [dia.isoformat() for dia in estado.huecos[:20]],
+            "huecos_totales": len(estado.huecos),
+            "hoy": hoy_boletin().isoformat(),
+            "resumen": estado.resumen(),
+            "fuentes": [
+                {
+                    "nombre": FixtureSource.name,
+                    "descripcion": FixtureSource.display_name,
+                    "metodo": FixtureSource.method,
+                    "licencia": FixtureSource.licencia_url,
+                }
+            ],
+            "cita_obligatoria": CITA_BOE,
+        }
+
+    return server
+
+
+def main() -> int:
+    """Arranca el servidor MCP por stdio."""
+    construir_servidor().run("stdio")
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
