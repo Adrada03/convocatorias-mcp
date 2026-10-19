@@ -71,8 +71,7 @@ def dias_registrados(settings: Settings) -> list[str]:
     conn = open_index(settings.index_path)
     try:
         return [
-            fila["fecha"]
-            for fila in conn.execute("SELECT fecha FROM source_health ORDER BY fecha")
+            fila["fecha"] for fila in conn.execute("SELECT fecha FROM source_health ORDER BY fecha")
         ]
     finally:
         conn.close()
@@ -128,9 +127,7 @@ async def test_un_atraso_pequeno_se_ingiere_antes_de_responder(
     assert "2026-10-19" in registrados
 
 
-async def test_la_puesta_al_dia_trae_convocatorias_de_verdad(
-    tmp_path: Path, convocatoria_factory
-):
+async def test_la_puesta_al_dia_trae_convocatorias_de_verdad(tmp_path: Path, convocatoria_factory):
     settings = settings_para(tmp_path, auto_ingest_dias=7)
     poblar(settings, convocatoria_factory, hasta=date(2026, 10, 16))
 
@@ -192,9 +189,7 @@ async def test_un_atraso_grande_no_bloquea_pero_avisa(tmp_path: Path, convocator
     assert "puesta_al_dia" not in datos
 
 
-async def test_el_atraso_grande_sigue_devolviendo_resultados(
-    tmp_path: Path, convocatoria_factory
-):
+async def test_el_atraso_grande_sigue_devolviendo_resultados(tmp_path: Path, convocatoria_factory):
     settings = settings_para(tmp_path, auto_ingest_dias=7)
     poblar(settings, convocatoria_factory, hasta=date(2026, 9, 1))
 
@@ -238,9 +233,7 @@ async def test_datos_sin_registro_de_ingesta_dicen_hasta_donde_llegan(
     settings = settings_para(tmp_path)
     conn = open_index(settings.index_path)
     try:
-        guardar_convocatorias(
-            conn, [convocatoria_factory(fecha_publicacion=DIA_CON_FIXTURE)]
-        )
+        guardar_convocatorias(conn, [convocatoria_factory(fecha_publicacion=DIA_CON_FIXTURE)])
     finally:
         conn.close()
 
@@ -256,9 +249,7 @@ async def test_datos_sin_registro_de_ingesta_dicen_hasta_donde_llegan(
 # --------------------------------------------------------------------------- #
 
 
-async def test_source_health_informa_siempre_de_la_antiguedad(
-    tmp_path: Path, convocatoria_factory
-):
+async def test_source_health_informa_siempre_de_la_antiguedad(tmp_path: Path, convocatoria_factory):
     settings = settings_para(tmp_path, auto_ingest_dias=0)
     poblar(settings, convocatoria_factory, hasta=date(2026, 10, 10))
 
@@ -270,9 +261,7 @@ async def test_source_health_informa_siempre_de_la_antiguedad(
     assert "aviso_indice" in datos
 
 
-async def test_source_health_con_el_indice_al_dia_no_avisa(
-    tmp_path: Path, convocatoria_factory
-):
+async def test_source_health_con_el_indice_al_dia_no_avisa(tmp_path: Path, convocatoria_factory):
     settings = settings_para(tmp_path)
     poblar(settings, convocatoria_factory, hasta=HOY)
 

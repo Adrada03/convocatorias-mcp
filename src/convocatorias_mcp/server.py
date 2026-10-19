@@ -26,11 +26,29 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
 from convocatorias_mcp import __version__
-from convocatorias_mcp.config import Settings, hoy_boletin
+from convocatorias_mcp.config import ConfigError, Settings, hoy_boletin, load_watchlists
 from convocatorias_mcp.db import estado_del_indice, open_index
-from convocatorias_mcp.index import buscar, guardar_texto, obtener_convocatoria, ultima_ingesta
+from convocatorias_mcp.index import (
+    buscar,
+    convocatorias_que_vencen,
+    guardar_texto,
+    listar_por_estado,
+    marcar_seguimiento,
+    obtener_convocatoria,
+    ultima_ingesta,
+)
 from convocatorias_mcp.ingest import ingerir
-from convocatorias_mcp.models import AVISO_NO_ELEGIBILIDAD, Convocatoria, SearchFilters, Seccion
+from convocatorias_mcp.models import (
+    AVISO_NO_ELEGIBILIDAD,
+    Convocatoria,
+    Estado,
+    SearchFilters,
+    Seccion,
+    Seguimiento,
+    WatchlistsConfig,
+)
+from convocatorias_mcp.plazos import extraer_plazo
+from convocatorias_mcp.ranking import puntuar, rankear
 from convocatorias_mcp.sources import FUENTES, crear_fuente
 from convocatorias_mcp.sources.base import SourceError
 from convocatorias_mcp.vocabulario import cargar_sinonimos
@@ -53,6 +71,11 @@ perfil, y enlaza siempre al texto oficial.
 """.strip()
 
 SOLO_LECTURA = ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False)
+# Los tools de estado escriben, pero no destruyen nada y repetirlos deja el
+# mismo resultado: eso es lo que anuncian sus anotaciones.
+ESCRITURA = ToolAnnotations(
+    read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+)
 
 
 @contextmanager
@@ -264,6 +287,12 @@ async def _descargar_texto(
             f"La fuente {convocatoria.fuente!r} no descarga textos completos. {enlace}"
         )
 
+    # El plazo sale del texto, así que se extrae aquí y se guarda de una vez.
+    # Si no se puede determinar queda en None: nunca se inventa una fecha.
+    plazo, origen = extraer_plazo(con_texto.texto_completo, publicado=con_texto.fecha_publicacion)
+    if plazo is not None:
+        con_texto = con_texto.model_copy(update={"plazo_fin": plazo, "plazo_origen": origen})
+
     with _indice(ajustes) as conn:
         guardar_texto(conn, con_texto)
     return con_texto, None
@@ -278,6 +307,20 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
     # Un intento de puesta al día por proceso y fuente: si la red está
     # caída, no se hace esperar al usuario en cada consulta.
     intentos_de_puesta_al_dia: set[str] = set()
+
+    def watchlists() -> WatchlistsConfig | None:
+        """Watchlists del usuario, releídas en cada uso.
+
+        A diferencia de los sinónimos, este fichero se edita a menudo
+        mientras se afina el perfil, y obligar a reiniciar Claude Desktop
+        para probar un cambio sería una mala experiencia.
+        """
+        try:
+            return load_watchlists(ajustes.watchlists_path)
+        except ConfigError:
+            # Un fichero roto no debe tumbar la búsqueda: doctor lo explica.
+            return None
+
     server = MCPServer(
         name="convocatorias",
         title="Convocatorias oficiales",
@@ -296,6 +339,7 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
         desde: date | None = None,
         hasta: date | None = None,
         ambito: str | None = None,
+        watchlist: str | None = None,
         include_vistas: bool = False,
         limite: int = 25,
     ) -> dict[str, Any]:
@@ -361,6 +405,10 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
                 filtra cuando el boletín lo publica, así que descarta las
                 convocatorias cuyo ámbito no se ha podido determinar. Si buscas
                 por zona, suele ser mejor no usarlo y mirar los resultados.
+            watchlist: Nombre de una watchlist del usuario para quedarte solo
+                con lo que ella hace coincidir. Si el usuario dice "lo de
+                siempre" o "mis becas", mira primero qué watchlists tiene en la
+                respuesta de source_health.
             include_vistas: Por defecto se omiten las ya enviadas en un digest.
                 Ponlo a true si el usuario quiere revisar también esas.
             limite: Máximo de resultados, entre 1 y 200.
@@ -378,9 +426,45 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
         # peor que tardar unos segundos.
         frescura = await _poner_al_dia(ajustes, intentos_de_puesta_al_dia)
 
+        config = watchlists()
+        seleccionada = config.get(watchlist) if (config and watchlist) else None
+        if watchlist and seleccionada is None:
+            nombres = [w.nombre for w in config.watchlists] if config else []
+            return {
+                "total": 0,
+                "resultados": [],
+                "error": (
+                    f"No hay ninguna watchlist llamada {watchlist!r}. "
+                    + (
+                        f"Las configuradas son: {', '.join(nombres)}."
+                        if nombres
+                        else "El usuario no tiene watchlists configuradas."
+                    )
+                ),
+            }
+
+        config_activa = bool(config and not config.is_empty)
+        # Con ranking se piden más candidatas de las que se van a devolver: si
+        # no, se ordenaría solo el puñado más reciente y una convocatoria muy
+        # afín de hace dos semanas no llegaría a verse nunca.
+        margen = (
+            filtros.model_copy(update={"limite": min(200, max(filtros.limite * 8, 50))})
+            if config_activa
+            else filtros
+        )
+
         with _indice(ajustes) as conn:
-            resultados = buscar(conn, filtros, sinonimos=sinonimos)
+            resultados = buscar(conn, margen, sinonimos=sinonimos, watchlist=seleccionada)
             estado = estado_del_indice(conn)
+
+        # El score ordena candidatas; la profundidad la pone el modelo sobre las
+        # pocas que suben. Por eso se puntúa con el título, la sección y el
+        # departamento, nunca con el texto completo.
+        if config_activa:
+            solo = WatchlistsConfig(watchlists=[seleccionada]) if seleccionada else config
+            resultados = rankear(resultados, solo, solo_coincidentes=bool(seleccionada))[
+                : filtros.limite
+            ]
 
         respuesta: dict[str, Any] = {
             "total": len(resultados),
@@ -496,6 +580,246 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
             ],
             "cita_obligatoria": CITA_BOE,
         }
+
+    @server.tool(name="explain_match", title="Por qué encaja", annotations=SOLO_LECTURA)
+    async def explain_match(id: str, watchlist: str | None = None) -> dict[str, Any]:
+        """Explica por qué una convocatoria encaja (o no) con las watchlists.
+
+        Úsalo cuando el usuario pregunte "¿por qué me sale esto?" o "¿por qué no
+        me sale lo que busco?". Devuelve el desglose del score por dimensiones:
+        palabras clave en el título, sección, departamento y ámbito.
+
+        Ojo con lo que significa: el score mide **afinidad temática**, no
+        elegibilidad. Que puntúe alto no dice nada sobre si el usuario cumple
+        los requisitos; eso está en el texto y se lee con get_convocatoria.
+
+        Args:
+            id: El campo "id" de un resultado de search_convocatorias.
+            watchlist: Para explicar solo una. Sin esto se explican todas.
+        """
+        config = watchlists()
+        if config is None or config.is_empty:
+            return {
+                "explicado": False,
+                "error": (
+                    "El usuario no tiene watchlists configuradas, así que no hay nada "
+                    "contra lo que puntuar. Puede crearlas copiando "
+                    "watchlists.example.yaml a watchlists.yaml."
+                ),
+            }
+
+        with _indice(ajustes) as conn:
+            convocatoria = obtener_convocatoria(conn, id)
+        if convocatoria is None:
+            return {
+                "explicado": False,
+                "error": f"No hay ninguna convocatoria con id {id!r} en el índice local.",
+            }
+
+        if watchlist:
+            elegida = config.get(watchlist)
+            if elegida is None:
+                return {
+                    "explicado": False,
+                    "error": (
+                        f"No hay ninguna watchlist llamada {watchlist!r}. Las "
+                        f"configuradas son: "
+                        f"{', '.join(w.nombre for w in config.watchlists)}."
+                    ),
+                }
+            objetivo = [elegida]
+        else:
+            objetivo = list(config.watchlists)
+
+        explicaciones: list[dict[str, Any]] = []
+        for lista in objetivo:
+            match = puntuar(convocatoria, lista)
+            if match is None:
+                if not lista.acepta_seccion(convocatoria.seccion):
+                    motivo = (
+                        f"La sección {convocatoria.seccion.value} no está entre las que "
+                        f"vigila esta watchlist."
+                    )
+                else:
+                    motivo = f"El score no llega al mínimo que pide ({lista.min_score})."
+                explicaciones.append(
+                    {"watchlist": lista.nombre, "coincide": False, "motivo": motivo}
+                )
+                continue
+            explicaciones.append(
+                {
+                    "watchlist": lista.nombre,
+                    "coincide": True,
+                    "score": match.total,
+                    "keywords_encontradas": match.keywords_encontradas,
+                    "keywords_ausentes": match.keywords_ausentes,
+                    "componentes": [
+                        {
+                            "dimension": componente.nombre,
+                            "peso": componente.peso,
+                            "cumplimiento": componente.ratio,
+                            "puntos": componente.puntos,
+                            "detalle": componente.detalle,
+                        }
+                        for componente in match.componentes
+                    ],
+                }
+            )
+
+        return {
+            "explicado": True,
+            "convocatoria": _resumir(convocatoria),
+            "watchlists": explicaciones,
+            "nota": (
+                "El score mide afinidad temática con lo que trae el sumario (título, "
+                "sección y departamento). No mide elegibilidad."
+            ),
+            "aviso": AVISO_NO_ELEGIBILIDAD,
+        }
+
+    @server.tool(name="deadlines_soon", title="Plazos que vencen", annotations=SOLO_LECTURA)
+    async def deadlines_soon(dias: int = 7, limite: int = 25) -> dict[str, Any]:
+        """Convocatorias con el plazo abierto que cierran dentro de N días.
+
+        Úsalo para "¿qué se me acaba pronto?" o para un repaso semanal.
+
+        IMPORTANTE: solo aparecen las convocatorias cuyo plazo se ha podido
+        determinar leyendo su texto. Muchas lo expresan como "veinte días
+        hábiles desde la publicación", que no se puede calcular sin el
+        calendario de festivos, y **esas no salen aquí**. Esta lista no es
+        exhaustiva: no le digas al usuario que no le vence nada más.
+
+        Args:
+            dias: Ventana en días naturales desde hoy. Por defecto 7.
+            limite: Máximo de resultados.
+        """
+        frescura = await _poner_al_dia(ajustes, intentos_de_puesta_al_dia)
+        hoy = hoy_boletin()
+        with _indice(ajustes) as conn:
+            proximas = convocatorias_que_vencen(conn, dias=dias, hoy=hoy, limite=limite)
+            con_plazo = conn.execute(
+                "SELECT COUNT(*) AS n FROM convocatorias WHERE plazo_fin IS NOT NULL"
+            ).fetchone()["n"]
+            total = conn.execute("SELECT COUNT(*) AS n FROM convocatorias").fetchone()["n"]
+
+        respuesta: dict[str, Any] = {
+            "dias": dias,
+            "hoy": hoy.isoformat(),
+            "total": len(proximas),
+            "resultados": [
+                {
+                    **_resumir(convocatoria),
+                    "dias_restantes": convocatoria.dias_hasta_plazo(hoy),
+                }
+                for convocatoria in proximas
+            ],
+            "cobertura_de_plazos": (
+                f"Solo {con_plazo} de las {total} convocatorias del índice tienen plazo "
+                "determinado, por dos razones: el plazo se extrae del texto oficial y "
+                "ese texto solo se descarga cuando se pide con get_convocatoria, y "
+                "muchas convocatorias lo expresan en días hábiles desde la publicación, "
+                "que no se puede calcular sin el calendario de festivos. Esta lista NO "
+                "es exhaustiva: no le digas al usuario que no le vence nada más."
+            ),
+            "aviso": AVISO_NO_ELEGIBILIDAD,
+            "cita_obligatoria": CITA_BOE,
+        }
+        respuesta.update(frescura.como_dict())
+        return respuesta
+
+    def _marcar(seguimiento: Seguimiento) -> dict[str, Any]:
+        with _indice(ajustes) as conn:
+            guardado = marcar_seguimiento(conn, seguimiento)
+            convocatoria = obtener_convocatoria(conn, seguimiento.convocatoria_id)
+
+        if not guardado or convocatoria is None:
+            return {
+                "guardado": False,
+                "error": (
+                    f"No hay ninguna convocatoria con id {seguimiento.convocatoria_id!r} "
+                    "en el índice local, así que no se ha anotado nada. Comprueba el id "
+                    "con search_convocatorias."
+                ),
+            }
+        return {
+            "guardado": True,
+            "estado": convocatoria.estado.value,
+            "convocatoria": _resumir(convocatoria),
+        }
+
+    @server.tool(name="mark_solicitada", title="Marcar como solicitada", annotations=ESCRITURA)
+    async def mark_solicitada(
+        id: str, notas: str | None = None, fecha: date | None = None
+    ) -> dict[str, Any]:
+        """Anota que el usuario ha solicitado una convocatoria.
+
+        Sirve de registro de solicitudes, que después se consulta con
+        list_solicitudes. Llámalo cuando el usuario diga que la ha pedido, que
+        la ha presentado o que ya la ha entregado.
+
+        Args:
+            id: El campo "id" de un resultado de search_convocatorias.
+            notas: Lo que el usuario quiera recordar: por dónde la presentó, qué
+                documentación envió, un número de registro.
+            fecha: Fecha de la solicitud en formato AAAA-MM-DD. Por defecto hoy.
+        """
+        return _marcar(
+            Seguimiento(
+                convocatoria_id=id,
+                estado=Estado.SOLICITADA,
+                notas=notas,
+                fecha_solicitud=fecha or hoy_boletin(),
+            )
+        )
+
+    @server.tool(name="discard", title="Descartar", annotations=ESCRITURA)
+    async def discard(id: str, motivo: str | None = None) -> dict[str, Any]:
+        """Descarta una convocatoria para que no vuelva a aparecer.
+
+        Llámalo cuando el usuario diga que algo no le interesa o no le aplica.
+        Las descartadas se omiten de las búsquedas y de los avisos de plazo.
+
+        Guarda el motivo si el usuario lo da: sirve para entender después por
+        qué se descartó, y para afinar sus watchlists.
+
+        Args:
+            id: El campo "id" de un resultado de search_convocatorias.
+            motivo: Por qué no le interesa, con las palabras del usuario.
+        """
+        return _marcar(Seguimiento(convocatoria_id=id, estado=Estado.DESCARTADA, motivo=motivo))
+
+    @server.tool(name="list_solicitudes", title="Solicitudes presentadas", annotations=SOLO_LECTURA)
+    async def list_solicitudes(incluir_descartadas: bool = False) -> dict[str, Any]:
+        """Lista las convocatorias que el usuario ha marcado como solicitadas.
+
+        Úsalo para "¿a qué me he apuntado?" o para repasar lo presentado.
+        Devuelve también las notas que se guardaron con cada una.
+
+        Args:
+            incluir_descartadas: Añade además las descartadas, con su motivo.
+        """
+        with _indice(ajustes) as conn:
+            solicitadas = listar_por_estado(conn, Estado.SOLICITADA)
+            descartadas = listar_por_estado(conn, Estado.DESCARTADA) if incluir_descartadas else []
+
+        def como_dict(par: tuple[Convocatoria, Seguimiento]) -> dict[str, Any]:
+            convocatoria, seguimiento = par
+            datos = _resumir(convocatoria)
+            datos["notas"] = seguimiento.notas
+            datos["motivo"] = seguimiento.motivo
+            datos["fecha_solicitud"] = (
+                seguimiento.fecha_solicitud.isoformat() if seguimiento.fecha_solicitud else None
+            )
+            return datos
+
+        respuesta: dict[str, Any] = {
+            "total": len(solicitadas),
+            "solicitadas": [como_dict(par) for par in solicitadas],
+            "cita_obligatoria": CITA_BOE,
+        }
+        if incluir_descartadas:
+            respuesta["descartadas"] = [como_dict(par) for par in descartadas]
+        return respuesta
 
     return server
 

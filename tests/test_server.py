@@ -99,7 +99,24 @@ def test_el_servidor_se_identifica(servidor):
 
 async def test_expone_los_tools_esperados(servidor):
     nombres = {tool.name for tool in await servidor.list_tools()}
-    assert nombres == {"search_convocatorias", "get_convocatoria", "source_health"}
+    assert nombres == {
+        "search_convocatorias",
+        "get_convocatoria",
+        "source_health",
+        "explain_match",
+        "deadlines_soon",
+        "mark_solicitada",
+        "discard",
+        "list_solicitudes",
+    }
+
+
+async def test_solo_se_registran_tools_que_funcionan(servidor):
+    # run_digest depende del digest, que todavia no existe: un tool declarado
+    # que no funciona es peor que uno que no existe, porque el modelo lo
+    # intenta y se lleva un error.
+    nombres = {tool.name for tool in await servidor.list_tools()}
+    assert "run_digest" not in nombres
 
 
 async def test_los_tools_estan_descritos_para_un_modelo(servidor):
@@ -113,10 +130,17 @@ async def test_los_tools_estan_descritos_para_un_modelo(servidor):
         assert any(guia in descripcion for guia in guias), tool.name
 
 
-async def test_los_tools_se_declaran_de_solo_lectura(servidor):
+ESCRIBEN = {"mark_solicitada", "discard"}
+
+
+async def test_cada_tool_declara_si_escribe(servidor):
     for tool in await servidor.list_tools():
         assert tool.annotations is not None, tool.name
-        assert tool.annotations.read_only_hint is True, tool.name
+        escribe = tool.name in ESCRIBEN
+        assert tool.annotations.read_only_hint is not escribe, tool.name
+        if escribe:
+            # Anotan un estado del usuario, no destruyen nada.
+            assert tool.annotations.destructive_hint is False, tool.name
 
 
 async def test_search_declara_sus_parametros(servidor):
