@@ -29,7 +29,7 @@ from convocatorias_mcp.config import Settings, hoy_boletin
 from convocatorias_mcp.db import estado_del_indice, open_index
 from convocatorias_mcp.index import buscar, obtener_convocatoria
 from convocatorias_mcp.models import AVISO_NO_ELEGIBILIDAD, Convocatoria, SearchFilters, Seccion
-from convocatorias_mcp.sources.fixture import FixtureSource
+from convocatorias_mcp.sources import FUENTES
 
 __all__ = ["construir_servidor", "main"]
 
@@ -265,11 +265,12 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
             "resumen": estado.resumen(),
             "fuentes": [
                 {
-                    "nombre": FixtureSource.name,
-                    "descripcion": FixtureSource.display_name,
-                    "metodo": FixtureSource.method,
-                    "licencia": FixtureSource.licencia_url,
+                    "nombre": clase.name,
+                    "descripcion": clase.display_name,
+                    "metodo": clase.method,
+                    "licencia": clase.licencia_url,
                 }
+                for clase in FUENTES.values()
             ],
             "cita_obligatoria": CITA_BOE,
         }

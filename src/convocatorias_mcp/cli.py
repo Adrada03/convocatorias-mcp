@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sqlite3
 import sys
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -28,10 +29,14 @@ import httpx
 from convocatorias_mcp import __version__
 from convocatorias_mcp.config import ConfigError, Settings, hoy_boletin, load_watchlists
 from convocatorias_mcp.db import IndexSchemaError, estado_del_indice, open_index
-from convocatorias_mcp.ingest import ingerir
+from convocatorias_mcp.ingest import Progreso, ResumenIngesta, ingerir
 from convocatorias_mcp.models import Watchlist
-from convocatorias_mcp.sources.base import DEFAULT_TIMEOUT_SECONDS, user_agent
-from convocatorias_mcp.sources.fixture import FixtureSource
+from convocatorias_mcp.sources import FUENTE_POR_DEFECTO, crear_fuente, nombres_de_fuentes
+from convocatorias_mcp.sources.base import (
+    DEFAULT_TIMEOUT_SECONDS,
+    BoletinSource,
+    user_agent,
+)
 
 __all__ = ["main"]
 
@@ -273,12 +278,45 @@ def run_doctor(*, check_api: bool = False, cwd: Path | None = None) -> int:
     return 0
 
 
-def run_ingest(*, backfill: int | None = None, forzar: bool = False) -> int:
+async def _ingerir_y_cerrar(
+    conn: sqlite3.Connection,
+    source: BoletinSource,
+    *,
+    desde: date,
+    hasta: date,
+    forzar: bool,
+    silencioso: bool,
+) -> ResumenIngesta:
+    """Envuelve la ingesta para cerrar siempre el cliente HTTP de la fuente."""
+
+    def informar(progreso: Progreso) -> None:
+        # flush porque un backfill tarda minutos y la salida se vería a trozos.
+        print(progreso.linea(), flush=True)
+
+    try:
+        return await ingerir(
+            conn,
+            source,
+            desde=desde,
+            hasta=hasta,
+            forzar=forzar,
+            on_progress=None if silencioso else informar,
+        )
+    finally:
+        await source.aclose()
+
+
+def run_ingest(
+    *,
+    fuente: str = FUENTE_POR_DEFECTO,
+    backfill: int | None = None,
+    forzar: bool = False,
+    silencioso: bool = False,
+) -> int:
     """Puebla el índice local. Devuelve 0 si fue bien, 1 si hubo errores.
 
-    De momento la única fuente registrada es ``FixtureSource``, que lee
-    sumarios guardados en disco: sirve para probar el servidor MCP end-to-end
-    sin red. La fuente real del BOE llega en el paso siguiente.
+    Por defecto usa el BOE. ``fixture`` lee sumarios guardados en disco y sirve
+    para desarrollar o probar el proyecto sin red.
     """
     try:
         settings = Settings.from_env()
@@ -286,27 +324,46 @@ def run_ingest(*, backfill: int | None = None, forzar: bool = False) -> int:
         print(f"Configuración inválida: {exc}", file=sys.stderr)
         return 1
 
-    dias = backfill if backfill is not None else settings.backfill_dias
-    hasta = hoy_boletin()
-    desde = hasta - timedelta(days=dias - 1)
+    try:
+        source = crear_fuente(fuente)
+    except KeyError as exc:
+        print(str(exc).strip("\"'"), file=sys.stderr)
+        return 1
 
-    source = FixtureSource()
     if not source.is_available():
         print(f"La fuente {source.name} no está disponible.", file=sys.stderr)
         return 1
 
+    dias = backfill if backfill is not None else settings.backfill_dias
+    hasta = hoy_boletin()
+    desde = hasta - timedelta(days=dias - 1)
+
     print(f"Ingiriendo {source.display_name}: {desde.isoformat()} a {hasta.isoformat()}")
+    if source.licencia_url:
+        print(f"Datos reutilizados bajo {source.licencia_url}")
+    print()
+
     conn = open_index(settings.index_path)
     try:
-        resumen = asyncio.run(ingerir(conn, source, desde=desde, hasta=hasta, forzar=forzar))
-        estado = estado_del_indice(conn)
+        resumen = asyncio.run(
+            _ingerir_y_cerrar(
+                conn,
+                source,
+                desde=desde,
+                hasta=hasta,
+                forzar=forzar,
+                silencioso=silencioso,
+            )
+        )
+        estado = estado_del_indice(conn, fuente=source.name)
     finally:
         conn.close()
 
+    print()
     print(resumen.resumen())
-    for fecha, detalle in resumen.errores:
-        print(f"  error en {fecha.isoformat()}: {detalle}", file=sys.stderr)
     print(f"Índice: {estado.resumen()}")
+    if source.cita_requerida:
+        print(source.cita_requerida)
     return 1 if resumen.errores else 0
 
 
@@ -353,6 +410,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Repite también las fechas ya ingeridas.",
     )
+    ingest.add_argument(
+        "--fuente",
+        default=FUENTE_POR_DEFECTO,
+        choices=nombres_de_fuentes(),
+        help=(
+            "Boletín a ingerir. 'fixture' lee sumarios guardados en disco y no "
+            f"toca la red (por defecto: {FUENTE_POR_DEFECTO})."
+        ),
+    )
+    ingest.add_argument(
+        "--silencioso",
+        action="store_true",
+        help="No imprime una línea por día; solo el resumen final.",
+    )
     return parser
 
 
@@ -369,7 +440,12 @@ def main(argv: list[str] | None = None) -> int:
         return run_doctor(check_api=args.check_api)
 
     if args.command == "ingest":
-        return run_ingest(backfill=args.backfill, forzar=args.forzar)
+        return run_ingest(
+            fuente=args.fuente,
+            backfill=args.backfill,
+            forzar=args.forzar,
+            silencioso=args.silencioso,
+        )
 
     # Sin subcomando se arranca el servidor MCP por stdio, que es como lo
     # invoca Claude Desktop. A partir de aqui stdout pertenece al protocolo.

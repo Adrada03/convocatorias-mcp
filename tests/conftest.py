@@ -3,11 +3,18 @@
 Regla de la suite: ningún test toca la red. Las fuentes HTTP se prueban con
 ``respx``, y los parsers con sumarios reales del BOE guardados en
 ``tests/fixtures/``.
+
+Esa regla no se deja a la buena voluntad: :func:`_sin_red` bloquea el
+transporte de ``httpx`` en todos los tests, así que un descuido falla con un
+mensaje claro en vez de salir a internet y tardar minutos. Pasó de verdad: al
+poner el BOE como fuente por defecto, los tests del comando ``ingest`` se
+fueron a la API real y la suite subió de 7 a 94 segundos.
 """
 
 from __future__ import annotations
 
 import json
+import socket
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -27,6 +34,26 @@ def _clean_shared_state() -> None:
     """
     RateLimiter.reset()
     RobotsPolicy.reset_cache()
+
+
+@pytest.fixture(autouse=True)
+def _sin_red(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bloquea cualquier petición que llegue de verdad a la red.
+
+    El corte va en la resolución de nombres, que es lo más abajo que se puede
+    poner sin tocar el sistema operativo. No vale hacerlo en los transportes de
+    ``httpx`` ni en ``httpcore``: ``respx`` parchea justo esas capas, y los dos
+    cortafuegos se pisarían. Así, un test con ``respx`` nunca llega hasta aquí y
+    uno sin mock falla antes de abrir un socket.
+    """
+
+    def bloquear(host: object, port: object, *args: object, **kwargs: object) -> None:
+        raise RuntimeError(
+            f"un test ha intentado salir a la red: {host}:{port}\n"
+            "Simula la respuesta con respx, o usa la fuente 'fixture'."
+        )
+
+    monkeypatch.setattr(socket, "getaddrinfo", bloquear)
 
 
 @pytest.fixture(scope="session")

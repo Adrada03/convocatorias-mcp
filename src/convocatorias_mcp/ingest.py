@@ -14,6 +14,7 @@ Tres propiedades que importan:
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -21,7 +22,37 @@ from convocatorias_mcp.index import fechas_registradas, guardar_convocatorias, r
 from convocatorias_mcp.models import EstadoIngesta, SourceHealth
 from convocatorias_mcp.sources.base import BoletinSource, SinPublicacion, SourceError
 
-__all__ = ["ResumenIngesta", "ingerir", "rango_de_fechas"]
+__all__ = ["Progreso", "ResumenIngesta", "ingerir", "rango_de_fechas"]
+
+
+@dataclass(frozen=True)
+class Progreso:
+    """Un día resuelto, para que quien llame pueda informar del avance.
+
+    Un backfill de 90 días son 90 peticiones espaciadas 1,5 s: varios minutos
+    en los que, sin esto, no se vería nada.
+    """
+
+    indice: int
+    total: int
+    fecha: date
+    estado: EstadoIngesta
+    items: int = 0
+    detalle: str | None = None
+
+    def linea(self) -> str:
+        """Una línea legible, pensada para la consola."""
+        marca = {
+            EstadoIngesta.OK: "ok",
+            EstadoIngesta.SIN_PUBLICACION: "sin publicación",
+            EstadoIngesta.ERROR: "ERROR",
+        }[self.estado]
+        contador = f"[{self.indice:>3}/{self.total}]"
+        if self.estado is EstadoIngesta.OK:
+            return f"{contador} {self.fecha.isoformat()}  {marca}  {self.items} convocatorias"
+        if self.estado is EstadoIngesta.ERROR:
+            return f"{contador} {self.fecha.isoformat()}  {marca}  {self.detalle}"
+        return f"{contador} {self.fecha.isoformat()}  {marca}"
 
 
 @dataclass
@@ -67,20 +98,28 @@ async def ingerir(
     desde: date,
     hasta: date,
     forzar: bool = False,
+    on_progress: Callable[[Progreso], None] | None = None,
 ) -> ResumenIngesta:
     """Ingiere el rango de fechas que falte y devuelve el resumen.
 
     Con ``forzar`` se repiten también las fechas ya resueltas, que es lo que
     hace falta si el parser cambia y hay que releer lo guardado.
+
+    ``on_progress`` se llama una vez por día **pedido**, no por día del rango:
+    los que ya estaban resueltos no generan ruido.
     """
     resumen = ResumenIngesta(fuente=source.name)
     ya_resueltas = set() if forzar else fechas_registradas(conn, source.name)
 
-    for fecha in rango_de_fechas(desde, hasta):
-        if fecha in ya_resueltas:
-            resumen.dias_omitidos += 1
-            continue
+    pendientes = [fecha for fecha in rango_de_fechas(desde, hasta) if fecha not in ya_resueltas]
+    resumen.dias_omitidos = len(rango_de_fechas(desde, hasta)) - len(pendientes)
+    total = len(pendientes)
 
+    def avisar(indice: int, fecha: date, estado: EstadoIngesta, **extra: object) -> None:
+        if on_progress is not None:
+            on_progress(Progreso(indice=indice, total=total, fecha=fecha, estado=estado, **extra))  # type: ignore[arg-type]
+
+    for indice, fecha in enumerate(pendientes, start=1):
         resumen.dias_pedidos += 1
         try:
             convocatorias = await source.fetch_dia(fecha)
@@ -91,6 +130,7 @@ async def ingerir(
                 SourceHealth(fuente=source.name, fecha=fecha, estado=EstadoIngesta.SIN_PUBLICACION),
             )
             resumen.dias_sin_publicacion += 1
+            avisar(indice, fecha, EstadoIngesta.SIN_PUBLICACION)
             continue
         except SourceError as exc:
             registrar_ingesta(
@@ -103,6 +143,7 @@ async def ingerir(
                 ),
             )
             resumen.errores.append((fecha, exc.message))
+            avisar(indice, fecha, EstadoIngesta.ERROR, detalle=exc.message)
             continue
 
         guardadas = guardar_convocatorias(conn, convocatorias)
@@ -111,5 +152,6 @@ async def ingerir(
             SourceHealth(fuente=source.name, fecha=fecha, estado=EstadoIngesta.OK, items=guardadas),
         )
         resumen.convocatorias += guardadas
+        avisar(indice, fecha, EstadoIngesta.OK, items=guardadas)
 
     return resumen

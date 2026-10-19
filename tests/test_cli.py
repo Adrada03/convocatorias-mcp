@@ -316,7 +316,7 @@ def test_el_parser_acepta_ingest_con_sus_opciones():
 
 
 def test_ingest_puebla_el_indice(entorno_limpio: Path, capsys):
-    codigo = run_ingest(backfill=30)
+    codigo = run_ingest(fuente="fixture", backfill=30)
 
     salida = capsys.readouterr().out
     assert codigo == 0
@@ -326,10 +326,10 @@ def test_ingest_puebla_el_indice(entorno_limpio: Path, capsys):
 
 
 def test_ingest_es_incremental_en_la_segunda_pasada(entorno_limpio: Path, capsys):
-    run_ingest(backfill=30)
+    run_ingest(fuente="fixture", backfill=30)
     capsys.readouterr()
 
-    codigo = run_ingest(backfill=30)
+    codigo = run_ingest(fuente="fixture", backfill=30)
 
     salida = capsys.readouterr().out
     assert codigo == 0
@@ -340,5 +340,5 @@ def test_ingest_es_incremental_en_la_segunda_pasada(entorno_limpio: Path, capsys
 def test_ingest_avisa_de_una_configuracion_invalida(entorno_limpio: Path, capsys, monkeypatch):
     monkeypatch.setenv("CONVOCATORIAS_BACKFILL_DIAS", "un mes")
 
-    assert run_ingest() == 1
+    assert run_ingest(fuente="fixture") == 1
     assert "Configuración inválida" in capsys.readouterr().err
