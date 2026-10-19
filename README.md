@@ -5,14 +5,12 @@ convocatorias que encajan con tu perfil: becas, ayudas, empleo público y
 subvenciones. El BOE publica a diario y es inabarcable a mano, así que la gente
 pierde convocatorias que le aplicaban.
 
-Dos formas de usarlo: **conversando con Claude** (Desktop o Code) en lenguaje
-natural, y como **digest diario por email** con lo nuevo y lo que vence pronto.
-Más un dashboard estático para consultar sin instalar nada.
+Se usa **conversando con Claude** (Desktop o Code) en lenguaje natural, y trae
+un dashboard estático para consultar sin instalar nada.
 
 > **Estado: en construcción.** Funciona end-to-end contra el BOE real: el
 > índice local tiene 14.933 convocatorias de los últimos 90 días, con servidor
-> MCP, ingesta incremental y el comando `doctor`. Pendiente: watchlists y
-> ranking, extracción de plazos, digest por email y dashboard.
+> MCP, ingesta incremental y el comando `doctor`. Pendiente: el dashboard.
 
 <!-- TODO: GIF de Claude usando el servidor en vivo -->
 
@@ -437,20 +435,6 @@ como el código interno del BOE (`3`).
 versiona la plantilla. Sin el fichero el servidor funciona igual, ordenando por
 fecha.
 
-### Digest por email
-
-Opcional, en `.env` (también en `.gitignore`):
-
-```bash
-cp .env.example .env
-```
-
-Con Gmail hace falta una **contraseña de aplicación**, no la del correo: activa
-la verificación en dos pasos y genérala en
-[myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords).
-
-Sin SMTP configurado el digest no falla: se escribe a fichero y se avisa.
-
 ### El comando `doctor`
 
 Este servidor lo lanza Claude Desktop en segundo plano, así que cuando algo está
@@ -466,13 +450,12 @@ convocatorias-mcp doctor --check-api
 [ ok ] watchlists.yaml: 2: becas-informatica (4 keywords, 2 secciones), empleo-publico-tic (3 keywords, 1 sección)
 [ ok ] índice: C:\Users\...\convocatorias-mcp\convocatorias-index.sqlite3
 [warn] contenido del índice: vacío; ejecuta 'convocatorias-mcp ingest' para poblarlo
-[warn] SMTP: sin configurar; el digest se escribirá a fichero en vez de enviarse
 [ ok ] API del BOE: sumario del 2026-10-19: HTTP 200, 371.771 bytes
 ```
 
 Revisa las watchlists (y avisa si tienen un typo, en vez de ignorarlo), el
-estado del índice con sus huecos, el SMTP y, con `--check-api`, la conectividad
-real con el BOE. Devuelve código de salida 1 si algo impide funcionar.
+estado del índice con sus huecos y, con `--check-api`, la conectividad real con
+el BOE. Devuelve código de salida 1 si algo impide funcionar.
 
 **Nunca imprime credenciales ni datos personales**, ni completos ni parciales:
 su salida está pensada para pegarse en un issue. De las claves dice la longitud,

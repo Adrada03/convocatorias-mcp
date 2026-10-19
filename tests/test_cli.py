@@ -20,7 +20,6 @@ from convocatorias_mcp.cli import (
     check_boe,
     check_index,
     check_python,
-    check_smtp,
     check_watchlists,
     main,
     run_doctor,
@@ -31,8 +30,6 @@ from convocatorias_mcp.db import open_index
 
 SUMARIO_URL = "https://www.boe.es/datosabiertos/api/boe/sumario/20261019"
 
-CONTRASENA = "contrasena-de-aplicacion-123"
-EMAIL = "alguien@example.com"
 
 WATCHLISTS_VALIDO = """
 watchlists:
@@ -127,44 +124,6 @@ def test_los_huecos_del_indice_se_senalan(tmp_path: Path):
     assert "2026-10-16" in huecos[0].detail
 
 
-def test_sin_smtp_solo_avisa(tmp_path: Path):
-    checks = check_smtp(settings_para_test(tmp_path))
-    assert checks[0].status == "warn"
-    assert "fichero" in checks[0].detail
-
-
-def test_smtp_a_medias_es_un_fallo(tmp_path: Path):
-    settings = settings_para_test(tmp_path, smtp_host="smtp.gmail.com", smtp_user="yo@gmail.com")
-    checks = check_smtp(settings)
-    assert any(check.status == "fail" for check in checks)
-
-
-def test_smtp_completo_esta_ok(tmp_path: Path):
-    settings = settings_para_test(
-        tmp_path,
-        smtp_host="smtp.gmail.com",
-        smtp_user="yo@gmail.com",
-        smtp_password=CONTRASENA,
-        digest_to=EMAIL,
-    )
-    checks = check_smtp(settings)
-    assert all(check.status == "ok" for check in checks)
-
-
-def test_la_comprobacion_de_smtp_no_filtra_nada(tmp_path: Path):
-    settings = settings_para_test(
-        tmp_path,
-        smtp_host="smtp.gmail.com",
-        smtp_user="yo@gmail.com",
-        smtp_password=CONTRASENA,
-        digest_to=EMAIL,
-    )
-    salida = "\n".join(check.render() for check in check_smtp(settings))
-    assert CONTRASENA not in salida
-    assert EMAIL not in salida
-    assert "yo@gmail.com" not in salida
-
-
 # --------------------------------------------------------------------------- #
 # Conectividad con el BOE
 # --------------------------------------------------------------------------- #
@@ -227,8 +186,7 @@ def entorno_limpio(tmp_path: Path, monkeypatch):
     """Aísla el doctor: índice y watchlists dentro de tmp_path."""
     monkeypatch.setenv("CONVOCATORIAS_INDEX_PATH", str(tmp_path / "indice.sqlite3"))
     monkeypatch.setenv("CONVOCATORIAS_WATCHLISTS_PATH", str(tmp_path / "watchlists.yaml"))
-    for clave in ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "DIGEST_TO"):
-        monkeypatch.delenv(clave, raising=False)
+    monkeypatch.delenv("CONVOCATORIAS_BACKFILL_DIAS", raising=False)
     return tmp_path
 
 
@@ -269,20 +227,12 @@ def test_doctor_no_sale_a_la_red_sin_check_api(entorno_limpio: Path, capsys):
     assert "--check-api" in salida
 
 
-def test_doctor_nunca_imprime_lo_sensible(entorno_limpio: Path, capsys):
-    (entorno_limpio / ".env").write_text(
-        f"SMTP_HOST=smtp.gmail.com\nSMTP_USER=yo@gmail.com\n"
-        f"SMTP_PASSWORD={CONTRASENA}\nDIGEST_TO={EMAIL}\n",
-        encoding="utf-8",
-    )
+def test_doctor_resume_sin_volcar_rutas_sensibles(entorno_limpio: Path, capsys):
+    # El doctor sigue siendo la salida que un usuario pega en un issue.
+    (entorno_limpio / ".env").write_text("CONVOCATORIAS_BACKFILL_DIAS=30\n", encoding="utf-8")
 
-    run_doctor(cwd=entorno_limpio)
-
-    salida = capsys.readouterr().out
-    assert CONTRASENA not in salida
-    assert EMAIL not in salida
-    # Pero si confirma que estan puestos, con su longitud.
-    assert f"({len(CONTRASENA)} caracteres)" in salida
+    assert run_doctor(cwd=entorno_limpio) == 0
+    assert ".env" in capsys.readouterr().out
 
 
 def test_el_parser_acepta_doctor_y_check_api():

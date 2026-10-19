@@ -1,7 +1,7 @@
 # Watchlists del usuario: datos personales, nunca se versionan
 watchlists.yaml
 
-# Credenciales de SMTP. Nunca al repo.
+# Ajustes locales. Nunca al repo.
 .env
 .env.local
 
@@ -9,7 +9,6 @@ watchlists.yaml
 *.db
 *.sqlite3
 dashboard/data.json
-digest-*.html
 
 # Python
 __pycache__/

@@ -1,7 +1,7 @@
 """Configuración del servidor: variables de entorno y carga de watchlists.
 
 Todo lo que cambia entre instalaciones entra por aquí, y nada de esto se
-versiona. Las credenciales de SMTP se leen de variables de entorno o de un
+versiona. Las rutas y los ajustes se leen de variables de entorno o de un
 ``.env`` local (ignorado por git); las watchlists, de un ``watchlists.yaml``
 propio de cada usuario.
 
@@ -105,15 +105,6 @@ class Settings(BaseModel):
     #: avisa. Con 0 se desactiva la puesta al día automática.
     auto_ingest_dias: int = Field(default=DEFAULT_AUTO_INGEST_DIAS, ge=0, le=90)
 
-    # --- Digest por email ------------------------------------------------- #
-    # repr=False en todo lo sensible: la contraseña es un secreto y el
-    # destinatario es un dato personal.
-    smtp_host: str | None = Field(default=None, repr=False)
-    smtp_port: int = Field(default=587, ge=1, le=65535)
-    smtp_user: str | None = Field(default=None, repr=False)
-    smtp_password: str | None = Field(default=None, repr=False)
-    digest_to: str | None = Field(default=None, repr=False)
-
     @classmethod
     def from_env(
         cls,
@@ -170,28 +161,14 @@ class Settings(BaseModel):
             auto_ingest_dias=_int_env(
                 env, "CONVOCATORIAS_AUTO_INGEST_DIAS", DEFAULT_AUTO_INGEST_DIAS
             ),
-            smtp_host=_clean(env.get("SMTP_HOST")),
-            smtp_port=_int_env(env, "SMTP_PORT", 587),
-            smtp_user=_clean(env.get("SMTP_USER")),
-            smtp_password=_clean(env.get("SMTP_PASSWORD")),
-            digest_to=_clean(env.get("DIGEST_TO")),
         )
-
-    @property
-    def has_smtp(self) -> bool:
-        """``True`` si el digest se puede enviar por email.
-
-        Sin esto el digest no falla: se escribe a fichero y se avisa.
-        """
-        return bool(self.smtp_host and self.smtp_user and self.smtp_password and self.digest_to)
 
     def describe_secret(self, name: str) -> str:
         """Describe un secreto o un dato personal sin revelarlo.
 
         Devuelve solo su longitud, que basta para distinguir "no lo he puesto"
         de "lo he pegado mal" sin que el valor acabe en una captura de pantalla
-        ni en el historial de la terminal. Se usa también con ``digest_to``:
-        una dirección de email no se imprime, ni enmascarada.
+        ni en el historial de la terminal.
         """
         value = getattr(self, name, None)
         if not value:

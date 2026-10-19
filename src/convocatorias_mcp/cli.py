@@ -77,7 +77,7 @@ def check_dotenv(cwd: Path) -> Check:
     return Check(
         ".env",
         "warn",
-        f"no hay {path}; copia .env.example a .env si quieres el digest por email",
+        f"no hay {path}; solo hace falta para cambiar rutas o ajustes",
     )
 
 
@@ -150,40 +150,6 @@ def check_index(settings: Settings) -> list[Check]:
     return checks
 
 
-def check_smtp(settings: Settings) -> list[Check]:
-    configurado_algo = any(
-        (settings.smtp_host, settings.smtp_user, settings.smtp_password, settings.digest_to)
-    )
-    if not configurado_algo:
-        return [
-            Check(
-                "SMTP",
-                "warn",
-                "sin configurar; el digest se escribirá a fichero en vez de enviarse",
-            )
-        ]
-
-    def estado(valor: object) -> Status:
-        return "ok" if valor else "fail"
-
-    checks = [
-        Check("SMTP_HOST", estado(settings.smtp_host), settings.describe_secret("smtp_host")),
-        Check("SMTP_PORT", "ok", str(settings.smtp_port)),
-        Check("SMTP_USER", estado(settings.smtp_user), settings.describe_secret("smtp_user")),
-        Check(
-            "SMTP_PASSWORD",
-            estado(settings.smtp_password),
-            settings.describe_secret("smtp_password"),
-        ),
-        Check("DIGEST_TO", estado(settings.digest_to), settings.describe_secret("digest_to")),
-    ]
-    if not settings.has_smtp:
-        checks.append(
-            Check("SMTP", "fail", "configurado a medias; faltan valores para poder enviar")
-        )
-    return checks
-
-
 def check_boe(*, timeout: float = DEFAULT_TIMEOUT_SECONDS, hoy: date | None = None) -> list[Check]:
     """Comprueba que la API del BOE responde.
 
@@ -249,7 +215,6 @@ def run_doctor(*, check_api: bool = False, cwd: Path | None = None) -> int:
 
     checks.append(check_watchlists(settings))
     checks.extend(check_index(settings))
-    checks.extend(check_smtp(settings))
 
     if check_api:
         checks.extend(check_boe())
@@ -380,7 +345,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = subparsers.add_parser(
         "doctor",
-        help="Revisa la instalación: watchlists, índice, SMTP y acceso al BOE.",
+        help="Revisa la instalación: watchlists, índice y acceso al BOE.",
         description=(
             "Revisa la instalación. Sin --check-api no sale a la red. Nunca imprime "
             "credenciales ni datos personales."

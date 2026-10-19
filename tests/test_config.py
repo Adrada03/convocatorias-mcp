@@ -36,9 +36,6 @@ notificacion:
   avisar_plazo_dias: 5
 """
 
-CONTRASENA = "contrasena-de-aplicacion-123"
-EMAIL = "alguien@example.com"
-
 
 def settings_para_test(tmp_path: Path, **overrides: object) -> Settings:
     data: dict[str, object] = {
@@ -72,58 +69,28 @@ def test_valores_por_defecto(tmp_path: Path):
     settings = Settings.from_env({}, cwd=tmp_path)
     assert settings.backfill_dias == DEFAULT_BACKFILL_DIAS
     assert settings.index_path.parent == default_data_dir()
-    assert not settings.has_smtp
-
-
-def test_lee_la_configuracion_de_smtp(tmp_path: Path):
-    settings = Settings.from_env(
-        {
-            "SMTP_HOST": "smtp.gmail.com",
-            "SMTP_PORT": "465",
-            "SMTP_USER": "yo@gmail.com",
-            "SMTP_PASSWORD": CONTRASENA,
-            "DIGEST_TO": EMAIL,
-        },
-        cwd=tmp_path,
-    )
-    assert settings.smtp_host == "smtp.gmail.com"
-    assert settings.smtp_port == 465
-    assert settings.has_smtp
-
-
-def test_smtp_a_medias_no_cuenta_como_configurado(tmp_path: Path):
-    settings = Settings.from_env({"SMTP_HOST": "smtp.gmail.com"}, cwd=tmp_path)
-    assert not settings.has_smtp
 
 
 def test_lee_el_dotenv_cuando_el_entorno_no_trae_el_valor(tmp_path: Path):
-    (tmp_path / ".env").write_text(f"SMTP_PASSWORD={CONTRASENA}\n", encoding="utf-8")
-    assert Settings.from_env({}, cwd=tmp_path).smtp_password == CONTRASENA
+    (tmp_path / ".env").write_text("CONVOCATORIAS_BACKFILL_DIAS=15\n", encoding="utf-8")
+    assert Settings.from_env({}, cwd=tmp_path).backfill_dias == 15
 
 
 def test_el_entorno_real_gana_al_dotenv(tmp_path: Path):
-    (tmp_path / ".env").write_text("SMTP_HOST=desde-dotenv\n", encoding="utf-8")
-    settings = Settings.from_env({"SMTP_HOST": "desde-entorno"}, cwd=tmp_path)
-    assert settings.smtp_host == "desde-entorno"
+    (tmp_path / ".env").write_text("CONVOCATORIAS_BACKFILL_DIAS=15\n", encoding="utf-8")
+    ajustes = Settings.from_env({"CONVOCATORIAS_BACKFILL_DIAS": "40"}, cwd=tmp_path)
+    assert ajustes.backfill_dias == 40
 
 
-@pytest.mark.parametrize("crudo", ['"secreto"', "'secreto'", "  secreto  "])
+@pytest.mark.parametrize("crudo", ['"30"', "'30'", "  30  "])
 def test_limpia_comillas_y_espacios_al_pegar_un_valor(tmp_path: Path, crudo: str):
-    assert Settings.from_env({"SMTP_PASSWORD": crudo}, cwd=tmp_path).smtp_password == "secreto"
-
-
-def test_un_valor_vacio_es_como_no_tenerlo(tmp_path: Path):
-    assert Settings.from_env({"SMTP_PASSWORD": "   "}, cwd=tmp_path).smtp_password is None
+    ajustes = Settings.from_env({"CONVOCATORIAS_BACKFILL_DIAS": crudo}, cwd=tmp_path)
+    assert ajustes.backfill_dias == 30
 
 
 def test_un_backfill_no_numerico_da_un_error_accionable(tmp_path: Path):
     with pytest.raises(ConfigError, match="CONVOCATORIAS_BACKFILL_DIAS"):
         Settings.from_env({"CONVOCATORIAS_BACKFILL_DIAS": "tres meses"}, cwd=tmp_path)
-
-
-def test_un_puerto_no_numerico_da_un_error_accionable(tmp_path: Path):
-    with pytest.raises(ConfigError, match="SMTP_PORT"):
-        Settings.from_env({"SMTP_PORT": "quinientos"}, cwd=tmp_path)
 
 
 def test_el_watchlists_local_gana_al_de_la_carpeta_de_datos(tmp_path: Path):
@@ -159,24 +126,12 @@ def test_la_carpeta_de_datos_es_absoluta():
 # --------------------------------------------------------------------------- #
 
 
-def test_el_repr_no_revela_la_contrasena_ni_el_destinatario(tmp_path: Path):
-    settings = settings_para_test(
-        tmp_path, smtp_password=CONTRASENA, digest_to=EMAIL, smtp_user="yo@gmail.com"
-    )
-    texto = repr(settings)
-    assert CONTRASENA not in texto
-    assert EMAIL not in texto
-    assert "yo@gmail.com" not in texto
-
-
-def test_describe_secret_solo_dice_la_longitud(tmp_path: Path):
-    settings = settings_para_test(tmp_path, smtp_password=CONTRASENA, digest_to=EMAIL)
-    descripcion = settings.describe_secret("smtp_password")
-    assert CONTRASENA not in descripcion
-    assert f"{len(CONTRASENA)} caracteres" in descripcion
-    # El email tampoco se imprime, ni enmascarado.
-    assert EMAIL not in settings.describe_secret("digest_to")
-    assert settings.describe_secret("smtp_host") == "no configurado"
+def test_describe_secret_no_revela_el_valor(tmp_path: Path):
+    # Sigue habiendo un sitio que describe secretos sin imprimirlos: cuando
+    # entre una fuente con credenciales, esta es la herramienta.
+    settings = settings_para_test(tmp_path)
+    assert settings.describe_secret("index_path").startswith("configurado (")
+    assert settings.describe_secret("no_existe") == "no configurado"
 
 
 # --------------------------------------------------------------------------- #
