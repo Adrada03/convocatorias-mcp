@@ -102,18 +102,88 @@ puede usarlo con su propia cuenta.
 
 | Tool | Qué hace |
 |---|---|
-| `search_convocatorias` | Filtro de nivel 1 sobre el índice: palabras clave, sección, rango de fechas y ámbito. Devuelve metadatos y enlaces, no textos. |
+| `search_convocatorias` | Filtro de nivel 1 sobre el índice: palabras clave, sección, fechas, ámbito y watchlist. Devuelve metadatos y enlaces, no textos. |
 | `get_convocatoria` | Una convocatoria con su texto oficial completo, para que el modelo lea los requisitos (nivel 2). La primera vez lo descarga del boletín y lo cachea; solo bajo demanda, nunca las 15.000 por adelantado. |
-| `source_health` | Hasta dónde llega el índice y si tiene huecos. Sirve para distinguir "no hay nada que encaje" de "esas fechas no están ingeridas". |
+| `explain_match` | Por qué una convocatoria encaja (o no) con cada watchlist, con el desglose del score por dimensiones. |
+| `deadlines_soon` | Lo que vence en los próximos N días, de las convocatorias con plazo determinado. |
+| `mark_solicitada` | Anota que la has solicitado, con notas y fecha. Es tu registro de solicitudes. |
+| `discard` | Descarta una convocatoria, con su motivo. Desaparece de búsquedas y avisos. |
+| `list_solicitudes` | Lo que has solicitado, con sus notas. Opcionalmente también lo descartado. |
+| `source_health` | Hasta dónde llega el índice, su antigüedad y si tiene huecos. Sirve para distinguir "no hay nada que encaje" de "esas fechas no están ingeridas". |
 
-Los tools que faltan (`explain_match`, `deadlines_soon`, `mark_solicitada`,
-`discard`, `list_solicitudes`, `run_digest`) llegan con el ranking y el digest.
-No están registrados: un tool declarado que no funciona es peor que uno que no
-existe, porque el modelo lo intentaría.
+Falta `run_digest`, que llega con el digest por email. No está registrado: un
+tool declarado que no funciona es peor que uno que no existe, porque el modelo
+lo intentaría y se llevaría un error.
 
 Toda respuesta lleva el aviso de no elegibilidad y la cita que exige la licencia
 del BOE. No es decorativo: hay tests de que ninguna respuesta puede salir sin
 ellos.
+
+### El ranking
+
+Con watchlists configuradas, los resultados se ordenan por afinidad. El score
+sale de cuatro dimensiones, con estos pesos por defecto:
+
+| Dimensión | Peso | Qué mira |
+|---|---|---|
+| Título | 0,55 | Palabras clave de la watchlist en el título. La señal más directa. |
+| Sección | 0,25 | Que la sección sea una de las que vigila, o al menos una de las que traen convocatorias. |
+| Departamento | 0,15 | Palabras clave en el departamento o el epígrafe. Suma cuando acierta, no resta cuando no. |
+| Ámbito | 0,05 | Solo cuando el boletín lo publica, que es casi nunca. |
+
+Tres decisiones que importan:
+
+- **El scoring no mira el texto completo.** Puntuar con el texto obligaría a
+  descargar 15.000 documentos y rompería el reparto en dos niveles: el score
+  ordena candidatas, y la profundidad la pone el modelo sobre las pocas que
+  suben.
+- **Una sección no vigilada es una exclusión, no un cero.** Si vigilas II.B y
+  III, una licitación de V.A no es "poco afín": es que no la has pedido.
+- **Las keywords de una watchlist son un OR.** Un perfil con cuatro intereses
+  no busca convocatorias que los mezclen todos; en una búsqueda explícita, en
+  cambio, las palabras que escribes se exigen todas.
+
+Los pesos viven en `ranking.Pesos` para poder afinarlos con el uso sin tocar la
+lógica. Y `explain_match` enseña el desglose, que es la forma de entender por
+qué sale lo que sale:
+
+```
+empleo-publico-tic: score 0.5416
+  titulo         peso=0.55  cumple=0.3333 -> 0.1833
+    1 de 3 palabras clave en el título: sistemas.
+  departamento   peso=0.15  cumple=0.0    -> 0.0
+    Ninguna de las 3 palabras clave aparece en el departamento o el epígrafe.
+  seccion        peso=0.25  cumple=1.0    -> 0.25
+    La sección II.B está entre las que vigila esta watchlist (II.B).
+```
+
+El score mide **afinidad temática, no elegibilidad**. Que algo puntúe 1,0 no
+dice nada sobre si cumples sus requisitos.
+
+### Los plazos, y por qué muchos faltan
+
+`plazo_fin` se extrae del texto oficial cuando se descarga, y solo si el texto
+lo dice de forma explícita e inequívoca: la frase tiene que hablar de un plazo
+**y** de presentar solicitudes, y dar una sola fecha. Si no, queda en
+`desconocido` y se dice con palabras.
+
+Sobre una muestra real de 18 extractos de convocatorias de la sección V.B:
+
+- **5 declaran una fecha absoluta** y se extraen bien.
+- **2 usan plazos relativos** ("veinte días hábiles desde la publicación"), que
+  no se calculan: haría falta el calendario de festivos nacionales,
+  autonómicos y locales, y equivocarse en un día es equivocarse.
+- **11 no declaran plazo** en el extracto, porque remiten a las bases.
+
+Esa proporción es la razón de que `deadlines_soon` avise de que su lista no es
+exhaustiva. Un plazo equivocado es peor que no tener plazo, porque alguien se
+fiaría de él.
+
+Durante el desarrollo el extractor sí se equivocó una vez, y merece la pena
+contarlo: cogió el `31 de diciembre de 2028` de la frase *"la beca no podrá
+superar la fecha límite de 31 de diciembre de 2028"*. Era la duración de la
+beca, no su plazo de solicitud. Por eso ahora se exige que la frase hable de
+presentar algo, y por eso hay un test con ese texto exacto.
 
 ### El índice se pone al día solo
 
