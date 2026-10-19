@@ -9,9 +9,11 @@ Dos formas de usarlo: **conversando con Claude** (Desktop o Code) en lenguaje
 natural, y como **digest diario por email** con lo nuevo y lo que vence pronto.
 Más un dashboard estático para consultar sin instalar nada.
 
-> **Estado: en construcción.** Hecho: modelo de dominio, índice SQLite, acceso
-> educado a fuentes y el comando `doctor`. Pendiente: servidor MCP, ingesta del
-> BOE, ranking, digest y dashboard.
+> **Estado: en construcción.** Funciona end-to-end en Claude Desktop contra un
+> sumario real del BOE guardado en disco: modelo de dominio, índice SQLite,
+> ingesta incremental, servidor MCP con tres tools y el comando `doctor`.
+> Pendiente: fuente del BOE en vivo, watchlists y ranking, plazos, digest por
+> email y dashboard.
 
 <!-- TODO: GIF de Claude usando el servidor en vivo -->
 
@@ -41,6 +43,98 @@ lo entrega a Claude para que lea los requisitos. Renta, edad, unidad familiar,
 empadronamiento y méritos vienen en prosa jurídica con formatos infinitos:
 **no se parsean con expresiones regulares.** Esa comprensión es exactamente
 para lo que sirve MCP.
+
+## Instalación y uso
+
+Hace falta Python 3.11 o superior.
+
+```bash
+git clone https://github.com/Adrada03/convocatorias-mcp
+cd convocatorias-mcp
+python -m venv .venv
+.venv/Scripts/activate        # en Linux o macOS: source .venv/bin/activate
+pip install -e .
+```
+
+Puebla el índice local y comprueba que todo está en su sitio:
+
+```bash
+convocatorias-mcp ingest
+convocatorias-mcp doctor
+```
+
+### Conectarlo a Claude Desktop
+
+Añade el servidor a `claude_desktop_config.json`. En Windows está en
+`%APPDATA%\Claude\`, y en macOS en
+`~/Library/Application Support/Claude/`:
+
+```json
+{
+  "mcpServers": {
+    "convocatorias": {
+      "command": "C:\\ruta\\a\\convocatorias-mcp\\.venv\\Scripts\\convocatorias-mcp.exe"
+    }
+  }
+}
+```
+
+En macOS o Linux el comando es la ruta al ejecutable del entorno:
+
+```json
+{
+  "mcpServers": {
+    "convocatorias": {
+      "command": "/ruta/a/convocatorias-mcp/.venv/bin/convocatorias-mcp"
+    }
+  }
+}
+```
+
+Reinicia Claude Desktop y pregúntale en lenguaje natural: *"¿qué convocatorias
+de oposiciones hay en el índice?"* o *"búscame subvenciones publicadas esta
+semana"*.
+
+Es un **servidor stdio local**: no hay servicio alojado, ni backend, ni claves.
+Lo arranca tu Claude en tu máquina y lee un índice SQLite de tu disco. Cualquiera
+puede usarlo con su propia cuenta.
+
+### Tools que expone
+
+| Tool | Qué hace |
+|---|---|
+| `search_convocatorias` | Filtro de nivel 1 sobre el índice: palabras clave, sección, rango de fechas y ámbito. Devuelve metadatos y enlaces, no textos. |
+| `get_convocatoria` | Una convocatoria concreta con su texto oficial, para que el modelo lea los requisitos (nivel 2). |
+| `source_health` | Hasta dónde llega el índice y si tiene huecos. Sirve para distinguir "no hay nada que encaje" de "esas fechas no están ingeridas". |
+
+Los tools que faltan (`explain_match`, `deadlines_soon`, `mark_solicitada`,
+`discard`, `list_solicitudes`, `run_digest`) llegan con el ranking y el digest.
+No están registrados: un tool declarado que no funciona es peor que uno que no
+existe, porque el modelo lo intentaría.
+
+Toda respuesta lleva el aviso de no elegibilidad y la cita que exige la licencia
+del BOE. No es decorativo: hay tests de que ninguna respuesta puede salir sin
+ellos.
+
+### Comandos
+
+| Comando | Qué hace |
+|---|---|
+| `convocatorias-mcp` | Arranca el servidor MCP por stdio. Es como lo invoca Claude Desktop. |
+| `convocatorias-mcp ingest [--backfill N] [--forzar]` | Puebla el índice con los sumarios que falten. Incremental: no repite fechas ya resueltas. |
+| `convocatorias-mcp doctor [--check-api]` | Revisa la instalación. |
+
+### La fuente de hoy es un sumario guardado
+
+Mientras se implementa la fuente del BOE en vivo, la única fuente registrada es
+`FixtureSource`, que lee el sumario real del 17/10/2026 desde
+`tests/fixtures/`. Sirve para probar el servidor completo sin red y sin depender
+de que el BOE publique hoy.
+
+Eso tiene una consecuencia a tener en cuenta: los ids de esas convocatorias
+empiezan por `fixture:` en vez de `boe:`. Cuando entre la fuente real conviene
+borrar el índice y volver a ingerir, para no quedarse con la misma convocatoria
+duplicada bajo dos ids. La ruta del índice la dice `convocatorias-mcp doctor`.
 
 ## Diseño en una frase
 
