@@ -1,0 +1,46 @@
+{
+  "manifest_version": "0.3",
+  "name": "convocatorias-mcp",
+  "display_name": "Convocatorias (BOE)",
+  "version": "0.1.0",
+  "description": "Vigila el BOE y encuentra becas, ayudas, empleo público y subvenciones que encajan con tu perfil.",
+  "long_description": "Servidor MCP local que indexa el Boletín Oficial del Estado y expone búsqueda, ranking por watchlists, plazos y seguimiento de solicitudes. Lee siempre el texto oficial enlazado: esta herramienta no determina si cumples los requisitos de una convocatoria.",
+  "author": {
+    "name": "Álvaro Adrada",
+    "url": "https://github.com/Adrada03"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Adrada03/convocatorias-mcp"
+  },
+  "homepage": "https://github.com/Adrada03/convocatorias-mcp",
+  "documentation": "https://github.com/Adrada03/convocatorias-mcp#readme",
+  "support": "https://github.com/Adrada03/convocatorias-mcp/issues",
+  "license": "MIT",
+  "keywords": ["boe", "convocatorias", "becas", "empleo-publico", "subvenciones", "boletin-oficial"],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/venv/Scripts/convocatorias-mcp.exe",
+    "mcp_config": {
+      "command": "${__dirname}/server/venv/Scripts/convocatorias-mcp.exe",
+      "args": []
+    }
+  },
+  "tools": [
+    { "name": "search_convocatorias", "description": "Filtro de nivel 1 sobre el índice: palabras clave, sección, fechas, ámbito y watchlist." },
+    { "name": "get_convocatoria", "description": "Una convocatoria con su texto oficial completo, para lectura de requisitos (nivel 2)." },
+    { "name": "explain_match", "description": "Por qué una convocatoria encaja (o no) con cada watchlist, con el desglose del score." },
+    { "name": "deadlines_soon", "description": "Convocatorias con plazo determinado que vencen en los próximos N días." },
+    { "name": "mark_solicitada", "description": "Anota que una convocatoria ha sido solicitada, con notas y fecha." },
+    { "name": "discard", "description": "Descarta una convocatoria, con su motivo, para que no vuelva a aparecer." },
+    { "name": "list_solicitudes", "description": "Lista las convocatorias solicitadas, opcionalmente también las descartadas." },
+    { "name": "source_health", "description": "Hasta dónde llega el índice local, su antigüedad y si tiene huecos." }
+  ],
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["win32"],
+    "runtimes": {
+      "python": ">=3.11,<4.0"
+    }
+  }
+}

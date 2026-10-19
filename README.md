@@ -61,41 +61,82 @@ convocatorias-mcp ingest
 convocatorias-mcp doctor
 ```
 
+### Conectarlo a Claude Code
+
+```bash
+claude mcp add --transport stdio --scope user convocatorias -- /ruta/a/convocatorias-mcp/.venv/Scripts/convocatorias-mcp.exe
+```
+
+En macOS o Linux el ejecutable está en `.venv/bin/convocatorias-mcp` en vez de
+`.venv/Scripts/convocatorias-mcp.exe`. Comprueba la conexión con:
+
+```bash
+claude mcp list
+```
+
+`convocatorias` debe aparecer como `Connected`.
+
 ### Conectarlo a Claude Desktop
 
-Añade el servidor a `claude_desktop_config.json`. En Windows está en
-`%APPDATA%\Claude\`, y en macOS en
-`~/Library/Application Support/Claude/`:
+Las versiones recientes de Claude Desktop ya no leen
+`claude_desktop_config.json` a mano: instalan servidores MCP locales como
+**extensiones de escritorio** (`.mcpb`), de un solo clic. Descarga el `.mcpb`
+de la [última release](https://github.com/Adrada03/convocatorias-mcp/releases/latest)
+y, en Claude Desktop, cualquiera de estas tres opciones:
 
-```json
-{
-  "mcpServers": {
-    "convocatorias": {
-      "command": "C:\\ruta\\a\\convocatorias-mcp\\.venv\\Scripts\\convocatorias-mcp.exe"
-    }
-  }
-}
-```
+- Haz doble clic en el archivo `.mcpb`.
+- Arrástralo a la ventana de Claude Desktop.
+- **Settings → Extensions → Advanced settings → Install Extension…** y
+  selecciónalo.
 
-En macOS o Linux el comando es la ruta al ejecutable del entorno:
+Revisa los permisos que te muestra antes de instalar: es un `.mcpb` sin firmar
+(no hay certificado de desarrollador detrás), así que solo instálalo si
+confías en la fuente — lo cual, siendo tu propio build o el de este repo, es
+razonable, pero la app te lo advierte igual.
 
-```json
-{
-  "mcpServers": {
-    "convocatorias": {
-      "command": "/ruta/a/convocatorias-mcp/.venv/bin/convocatorias-mcp"
-    }
-  }
-}
-```
+> Si usas una versión de Claude Desktop **anterior** a las extensiones `.mcpb`
+> (antes de 2025), todavía puede valer la configuración manual en
+> `claude_desktop_config.json` (`%APPDATA%\Claude\` en Windows,
+> `~/Library/Application Support/Claude/` en macOS):
+> ```json
+> {
+>   "mcpServers": {
+>     "convocatorias": {
+>       "command": "C:\\ruta\\a\\convocatorias-mcp\\.venv\\Scripts\\convocatorias-mcp.exe"
+>     }
+>   }
+> }
+> ```
+> En versiones nuevas este archivo simplemente no se lee: si lo editas y no
+> pasa nada, es señal de que te hace falta el `.mcpb` de arriba, no de que lo
+> hiciste mal.
 
-Reinicia Claude Desktop y pregúntale en lenguaje natural: *"¿qué convocatorias
-de oposiciones hay en el índice?"* o *"búscame subvenciones publicadas esta
-semana"*.
+Una vez conectado (por Code o por Desktop), pregúntale en lenguaje natural:
+*"¿qué convocatorias de oposiciones hay en el índice?"* o *"búscame
+subvenciones publicadas esta semana"*.
 
 Es un **servidor stdio local**: no hay servicio alojado, ni backend, ni claves.
 Lo arranca tu Claude en tu máquina y lee un índice SQLite de tu disco. Cualquiera
 puede usarlo con su propia cuenta.
+
+### Construir el `.mcpb` tú mismo
+
+El `.mcpb` de las releases no se genera a mano ni se versiona en el repo (son
+~20 MB de un entorno virtual empaquetado). Si prefieres construirlo tú:
+
+```bash
+python -m venv mcpb/server/venv
+mcpb/server/venv/Scripts/pip install .   # instala solo las dependencias de runtime, sin -e
+cd ..
+npm install -g @anthropic-ai/mcpb
+mcpb pack mcpb dist/convocatorias-mcp.mcpb
+```
+
+`mcpb/manifest.json` describe las ocho tools y cómo lanzar el servidor
+(`server/venv/Scripts/convocatorias-mcp.exe`, sin argumentos). Por ahora solo
+está probado en Windows (`compatibility.platforms` en el manifest lo refleja);
+construir el equivalente en macOS/Linux debería ser el mismo proceso con
+`.venv/bin/` en vez de `.venv/Scripts/`, pero no se ha verificado.
 
 ### Tools que expone
 

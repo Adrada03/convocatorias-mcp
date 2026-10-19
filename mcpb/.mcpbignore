@@ -1,0 +1,8 @@
+# Cache de Python: no aporta nada al bundle y crece con cada build.
+__pycache__/
+*.pyc
+*.pyo
+
+# Metadatos de instalación que no hacen falta para ejecutar.
+server/venv/**/__pycache__/
+server/venv/Lib/site-packages/**/*.dist-info/RECORD

@@ -24,6 +24,10 @@ dist/
 coverage.xml
 htmlcov/
 
+# Entorno empaquetado para el .mcpb: se reconstruye con `mcpb pack`,
+# no se versiona (son ~65 MB de un venv).
+mcpb/server/
+
 # Editores / SO
 .vscode/
 .idea/
