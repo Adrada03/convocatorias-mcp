@@ -1,0 +1,2 @@
+# Normaliza a LF en el repo: el CI corre en Linux y evita diffs de solo fin de linea.
+* text=auto eol=lf
