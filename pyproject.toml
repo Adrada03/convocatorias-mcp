@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "jobscout-mcp"
+name = "convocatorias-mcp"
 version = "0.1.0"
-description = "Servidor MCP para buscar y rankear ofertas de empleo en portales españoles"
+description = "Servidor MCP que vigila los boletines oficiales españoles y encuentra convocatorias que encajan con tu perfil"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Álvaro Adrada" }]
-keywords = ["mcp", "model-context-protocol", "jobs", "empleo", "scraping"]
+keywords = ["mcp", "model-context-protocol", "boe", "convocatorias", "becas", "datos-abiertos"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
@@ -18,6 +18,7 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+  "Natural Language :: Spanish",
 ]
 dependencies = [
   "mcp>=1.2",
@@ -39,14 +40,14 @@ dev = [
 ]
 
 [project.scripts]
-jobscout-mcp = "jobscout_mcp.cli:main"
+convocatorias-mcp = "convocatorias_mcp.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/Adrada03/jobscout-mcp"
-Repository = "https://github.com/Adrada03/jobscout-mcp"
+Homepage = "https://github.com/Adrada03/convocatorias-mcp"
+Repository = "https://github.com/Adrada03/convocatorias-mcp"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/jobscout_mcp"]
+packages = ["src/convocatorias_mcp"]
 
 [tool.ruff]
 line-length = 100
@@ -74,5 +75,5 @@ asyncio_mode = "auto"
 addopts = "-q"
 
 [tool.coverage.run]
-source = ["src/jobscout_mcp"]
+source = ["src/convocatorias_mcp"]
 branch = true

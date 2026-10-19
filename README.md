@@ -1,4 +1,4 @@
-# jobscout-mcp
+# convocatorias-mcp
 
 Servidor MCP que busca ofertas de empleo en varias fuentes a la vez, las
 deduplica y las ordena por afinidad con tu perfil. Pensado para usarse desde
@@ -88,7 +88,7 @@ legítima se cubre mucho volumen. Su API es gratuita con registro.
 3. Comprueba que han quedado bien:
 
    ```bash
-   jobscout-mcp doctor --check-api
+   convocatorias-mcp doctor --check-api
    ```
 
 `.env` está en `.gitignore` y no entra nunca al repositorio. El comando
@@ -110,7 +110,7 @@ mal configurado no hay ningún mensaje de error a la vista. `doctor` es el sitio
 donde mirar:
 
 ```bash
-jobscout-mcp doctor
+convocatorias-mcp doctor
 ```
 
 Revisa la versión de Python, el `.env`, las credenciales, el `profile.yaml` (y

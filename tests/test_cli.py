@@ -13,7 +13,7 @@ import httpx
 import pytest
 import respx
 
-from jobscout_mcp.cli import (
+from convocatorias_mcp.cli import (
     build_parser,
     check_adzuna_api,
     check_dotenv,
@@ -22,7 +22,7 @@ from jobscout_mcp.cli import (
     main,
     run_doctor,
 )
-from jobscout_mcp.config import Settings
+from convocatorias_mcp.config import Settings
 
 SEARCH_URL = "https://api.adzuna.com/v1/api/jobs/es/search/1"
 
@@ -141,7 +141,7 @@ def test_check_api_manda_el_user_agent_del_proyecto(tmp_path: Path):
 
     check_adzuna_api(settings_con_credenciales(tmp_path))
 
-    assert ruta.calls.last.request.headers["user-agent"].startswith("jobscout-mcp/")
+    assert ruta.calls.last.request.headers["user-agent"].startswith("convocatorias-mcp/")
 
 
 @respx.mock
@@ -231,12 +231,12 @@ def test_doctor_falla_si_el_perfil_esta_roto(tmp_path: Path, capsys):
 
 
 def test_doctor_falla_con_una_configuracion_invalida(tmp_path: Path, capsys, monkeypatch):
-    monkeypatch.setenv("JOBSCOUT_CACHE_TTL", "un rato")
+    monkeypatch.setenv("CONVOCATORIAS_CACHE_TTL", "un rato")
 
     codigo = run_doctor(cwd=tmp_path)
 
     assert codigo == 1
-    assert "JOBSCOUT_CACHE_TTL" in capsys.readouterr().out
+    assert "CONVOCATORIAS_CACHE_TTL" in capsys.readouterr().out
 
 
 def test_doctor_no_sale_a_la_red_sin_check_api(tmp_path: Path, capsys):

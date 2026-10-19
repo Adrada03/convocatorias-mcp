@@ -12,7 +12,7 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from jobscout_mcp.models import (
+from convocatorias_mcp.models import (
     ContractType,
     JobListing,
     SalaryRange,

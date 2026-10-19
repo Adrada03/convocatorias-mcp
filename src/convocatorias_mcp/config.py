@@ -23,7 +23,7 @@ import yaml
 from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from jobscout_mcp.models import UserProfile
+from convocatorias_mcp.models import UserProfile
 
 __all__ = [
     "DEFAULT_CACHE_TTL_SECONDS",
@@ -37,7 +37,7 @@ __all__ = [
 #: caché no es una optimización sino parte del funcionamiento normal.
 DEFAULT_CACHE_TTL_SECONDS = 6 * 60 * 60
 
-DEFAULT_CACHE_FILENAME = "jobscout-cache.sqlite3"
+DEFAULT_CACHE_FILENAME = "convocatorias-index.sqlite3"
 DEFAULT_PROFILE_FILENAME = "profile.yaml"
 
 
@@ -53,11 +53,11 @@ def default_data_dir() -> Path:
     """
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local"
-        return Path(base) / "jobscout-mcp"
+        return Path(base) / "convocatorias-mcp"
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "jobscout-mcp"
+        return Path.home() / "Library" / "Application Support" / "convocatorias-mcp"
     base = os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share"
-    return Path(base) / "jobscout-mcp"
+    return Path(base) / "convocatorias-mcp"
 
 
 class Settings(BaseModel):
@@ -104,7 +104,7 @@ class Settings(BaseModel):
 
         data_dir = default_data_dir()
 
-        profile_path = env.get("JOBSCOUT_PROFILE_PATH")
+        profile_path = env.get("CONVOCATORIAS_PROFILE_PATH")
         if profile_path:
             resolved_profile = Path(profile_path).expanduser()
         else:
@@ -113,17 +113,17 @@ class Settings(BaseModel):
             local = cwd / DEFAULT_PROFILE_FILENAME
             resolved_profile = local if local.is_file() else data_dir / DEFAULT_PROFILE_FILENAME
 
-        cache_path = env.get("JOBSCOUT_CACHE_PATH")
+        cache_path = env.get("CONVOCATORIAS_CACHE_PATH")
         resolved_cache = (
             Path(cache_path).expanduser() if cache_path else data_dir / DEFAULT_CACHE_FILENAME
         )
 
-        ttl_raw = env.get("JOBSCOUT_CACHE_TTL")
+        ttl_raw = env.get("CONVOCATORIAS_CACHE_TTL")
         try:
             ttl = int(ttl_raw) if ttl_raw else DEFAULT_CACHE_TTL_SECONDS
         except ValueError as exc:
             raise ConfigError(
-                f"JOBSCOUT_CACHE_TTL debe ser un número de segundos, no {ttl_raw!r}"
+                f"CONVOCATORIAS_CACHE_TTL debe ser un número de segundos, no {ttl_raw!r}"
             ) from exc
 
         country = (env.get("ADZUNA_COUNTRY") or "es").strip().lower()

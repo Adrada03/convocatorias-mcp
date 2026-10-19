@@ -1,8 +1,8 @@
 """Interfaz de línea de comandos: punto de entrada y diagnóstico.
 
-    jobscout-mcp                      arranca el servidor MCP por stdio
-    jobscout-mcp doctor               revisa la instalación
-    jobscout-mcp doctor --check-api   además hace una petición real a Adzuna
+    convocatorias-mcp                      arranca el servidor MCP por stdio
+    convocatorias-mcp doctor               revisa la instalación
+    convocatorias-mcp doctor --check-api   además hace una petición real a Adzuna
 
 ``doctor`` existe porque este servidor lo lanza Claude Desktop en segundo
 plano: si algo está mal configurado, el usuario solo ve que "no funciona", sin
@@ -22,9 +22,9 @@ from typing import Literal
 
 import httpx
 
-from jobscout_mcp import __version__
-from jobscout_mcp.config import ConfigError, Settings, load_profile
-from jobscout_mcp.sources.base import DEFAULT_TIMEOUT_SECONDS, user_agent
+from convocatorias_mcp import __version__
+from convocatorias_mcp.config import ConfigError, Settings, load_profile
+from convocatorias_mcp.sources.base import DEFAULT_TIMEOUT_SECONDS, user_agent
 
 __all__ = ["main"]
 
@@ -126,7 +126,7 @@ def check_cache(settings: Settings) -> Check:
     except OSError as exc:
         return Check("caché", "fail", f"no se puede crear {parent}: {exc}")
 
-    probe = parent / ".jobscout-write-test"
+    probe = parent / ".convocatorias-write-test"
     try:
         probe.write_text("ok", encoding="utf-8")
         probe.unlink()
@@ -227,7 +227,7 @@ def check_adzuna_api(
 def run_doctor(*, check_api: bool = False, cwd: Path | None = None) -> int:
     """Imprime el diagnóstico. Devuelve 0 si todo está bien, 1 si algo falla."""
     cwd = cwd or Path.cwd()
-    print(f"jobscout-mcp {__version__}")
+    print(f"convocatorias-mcp {__version__}")
     print(f"User-Agent: {user_agent()}\n")
 
     checks: list[Check] = [check_python(), check_dotenv(cwd)]
@@ -274,10 +274,10 @@ def run_doctor(*, check_api: bool = False, cwd: Path | None = None) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="jobscout-mcp",
+        prog="convocatorias-mcp",
         description="Servidor MCP de búsqueda agregada de ofertas de empleo.",
     )
-    parser.add_argument("--version", action="version", version=f"jobscout-mcp {__version__}")
+    parser.add_argument("--version", action="version", version=f"convocatorias-mcp {__version__}")
     subparsers = parser.add_subparsers(dest="command")
 
     doctor = subparsers.add_parser(
@@ -297,7 +297,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Punto de entrada del comando ``jobscout-mcp``."""
+    """Punto de entrada del comando ``convocatorias-mcp``."""
     # La salida lleva acentos y la consola de Windows no siempre usa UTF-8.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -311,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
     # Sin subcomando se arranca el servidor MCP, que todavía no existe.
     print(
         "El servidor MCP aún no está implementado.\n"
-        "Mientras tanto, 'jobscout-mcp doctor' revisa la instalación.",
+        "Mientras tanto, 'convocatorias-mcp doctor' revisa la instalación.",
         file=sys.stderr,
     )
     return 2

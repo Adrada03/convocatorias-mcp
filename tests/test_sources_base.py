@@ -15,8 +15,8 @@ import httpx
 import pytest
 import respx
 
-from jobscout_mcp.models import JobListing, SearchFilters
-from jobscout_mcp.sources.base import (
+from convocatorias_mcp.models import JobListing, SearchFilters
+from convocatorias_mcp.sources.base import (
     DEFAULT_MIN_DELAY_SECONDS,
     JobSource,
     PoliteHttpSource,
@@ -100,8 +100,8 @@ def test_source_error_identifica_la_fuente_y_conserva_la_causa():
 
 def test_el_user_agent_es_honesto_y_contactable():
     agent = user_agent()
-    assert agent.startswith("jobscout-mcp/")
-    assert "github.com/Adrada03/jobscout-mcp" in agent
+    assert agent.startswith("convocatorias-mcp/")
+    assert "github.com/Adrada03/convocatorias-mcp" in agent
     # No imitamos ningún navegador.
     for impostor in ("Mozilla", "Chrome", "Safari", "AppleWebKit"):
         assert impostor not in agent
@@ -160,7 +160,7 @@ async def test_robots_disallow_impide_la_peticion():
 async def test_robots_prohibido_solo_para_nuestro_agente():
     respx.get(ROBOTS_URL).mock(
         return_value=httpx.Response(
-            200, text="User-agent: jobscout-mcp\nDisallow: /\n\nUser-agent: *\nDisallow:\n"
+            200, text="User-agent: convocatorias-mcp\nDisallow: /\n\nUser-agent: *\nDisallow:\n"
         )
     )
     respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, text=RESULTADOS_HTML))

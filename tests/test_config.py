@@ -11,14 +11,14 @@ from pathlib import Path
 
 import pytest
 
-from jobscout_mcp.config import (
+from convocatorias_mcp.config import (
     DEFAULT_CACHE_TTL_SECONDS,
     ConfigError,
     Settings,
     default_data_dir,
     load_profile,
 )
-from jobscout_mcp.models import Seniority
+from convocatorias_mcp.models import Seniority
 
 PERFIL_VALIDO = """
 skills: [python, fastapi]
@@ -87,8 +87,8 @@ def test_una_clave_vacia_es_como_no_tenerla(tmp_path: Path):
 
 
 def test_ttl_invalido_da_un_error_accionable(tmp_path: Path):
-    with pytest.raises(ConfigError, match="JOBSCOUT_CACHE_TTL"):
-        Settings.from_env({"JOBSCOUT_CACHE_TTL": "seis horas"}, cwd=tmp_path)
+    with pytest.raises(ConfigError, match="CONVOCATORIAS_CACHE_TTL"):
+        Settings.from_env({"CONVOCATORIAS_CACHE_TTL": "seis horas"}, cwd=tmp_path)
 
 
 def test_pais_invalido_da_un_error_accionable(tmp_path: Path):
@@ -110,9 +110,9 @@ def test_sin_profile_local_se_usa_la_carpeta_de_datos(tmp_path: Path):
 def test_las_rutas_se_pueden_forzar_por_entorno(tmp_path: Path):
     settings = Settings.from_env(
         {
-            "JOBSCOUT_PROFILE_PATH": str(tmp_path / "otro.yaml"),
-            "JOBSCOUT_CACHE_PATH": str(tmp_path / "otra.sqlite3"),
-            "JOBSCOUT_CACHE_TTL": "60",
+            "CONVOCATORIAS_PROFILE_PATH": str(tmp_path / "otro.yaml"),
+            "CONVOCATORIAS_CACHE_PATH": str(tmp_path / "otra.sqlite3"),
+            "CONVOCATORIAS_CACHE_TTL": "60",
         },
         cwd=tmp_path,
     )

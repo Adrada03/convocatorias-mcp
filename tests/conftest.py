@@ -10,8 +10,8 @@ from datetime import UTC, date, datetime
 
 import pytest
 
-from jobscout_mcp.models import ContractType, JobListing, Seniority, WorkMode
-from jobscout_mcp.sources.base import RateLimiter, RobotsPolicy
+from convocatorias_mcp.models import ContractType, JobListing, Seniority, WorkMode
+from convocatorias_mcp.sources.base import RateLimiter, RobotsPolicy
 
 
 @pytest.fixture(autouse=True)

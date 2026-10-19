@@ -29,8 +29,8 @@ from urllib.robotparser import RobotFileParser
 import httpx
 from bs4 import BeautifulSoup
 
-from jobscout_mcp import __version__
-from jobscout_mcp.models import JobListing, SearchFilters
+from convocatorias_mcp import __version__
+from convocatorias_mcp.models import JobListing, SearchFilters
 
 __all__ = [
     "DEFAULT_MIN_DELAY_SECONDS",
@@ -60,7 +60,7 @@ def user_agent() -> str:
     No se imita ningún navegador a propósito. Un administrador que vea esta
     cadena en sus logs puede identificar el cliente y contactar o bloquear.
     """
-    return f"jobscout-mcp/{__version__} (+https://github.com/Adrada03/jobscout-mcp)"
+    return f"convocatorias-mcp/{__version__} (+https://github.com/Adrada03/convocatorias-mcp)"
 
 
 class SourceError(Exception):
