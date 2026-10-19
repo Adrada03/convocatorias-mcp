@@ -4,6 +4,7 @@
     convocatorias-mcp doctor               revisa la instalación
     convocatorias-mcp doctor --check-api   además comprueba el acceso al BOE
     convocatorias-mcp ingest               puebla el índice local
+    convocatorias-mcp export               genera el JSON del dashboard
 
 ``doctor`` existe porque este servidor lo lanza Claude Desktop en segundo
 plano: si algo está mal configurado, el usuario solo ve que "no funciona", sin
@@ -29,6 +30,7 @@ import httpx
 from convocatorias_mcp import __version__
 from convocatorias_mcp.config import ConfigError, Settings, hoy_boletin, load_watchlists
 from convocatorias_mcp.db import IndexSchemaError, estado_del_indice, open_index
+from convocatorias_mcp.export import CITA_BOE, VENTANA_POR_DEFECTO, exportar
 from convocatorias_mcp.ingest import Progreso, ResumenIngesta, ingerir
 from convocatorias_mcp.models import Watchlist
 from convocatorias_mcp.sources import FUENTE_POR_DEFECTO, crear_fuente, nombres_de_fuentes
@@ -37,6 +39,7 @@ from convocatorias_mcp.sources.base import (
     BoletinSource,
     user_agent,
 )
+from convocatorias_mcp.vocabulario import cargar_sinonimos
 
 __all__ = ["main"]
 
@@ -332,6 +335,49 @@ def run_ingest(
     return 1 if resumen.errores else 0
 
 
+def run_export(*, dias: int | None = VENTANA_POR_DEFECTO, salida: Path | None = None) -> int:
+    """Genera el JSON que consume el dashboard."""
+    try:
+        settings = Settings.from_env()
+    except ConfigError as exc:
+        print(f"Configuración inválida: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        config = load_watchlists(settings.watchlists_path)
+    except ConfigError as exc:
+        # Sin watchlists se exporta igual: lo que no se puede es exportar con
+        # unas watchlists que el usuario cree que valen y no valen.
+        print(f"watchlists.yaml tiene errores: {exc}", file=sys.stderr)
+        return 1
+
+    destino = salida or Path("dashboard") / "data.json"
+    conn = open_index(settings.index_path)
+    try:
+        resumen = exportar(
+            conn,
+            destino,
+            config=config,
+            sinonimos=cargar_sinonimos(settings.sinonimos_path),
+            dias=dias,
+        )
+    finally:
+        conn.close()
+
+    print(f"Escrito {resumen.ruta}")
+    print(resumen.resumen())
+    if resumen.cubre_hasta:
+        print(f"Los datos llegan hasta el {resumen.cubre_hasta.isoformat()}")
+    if resumen.exportadas == 0:
+        print(
+            "El índice está vacío: ejecuta 'convocatorias-mcp ingest' antes de exportar.",
+            file=sys.stderr,
+        )
+        return 1
+    print(CITA_BOE)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="convocatorias-mcp",
@@ -389,6 +435,36 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="No imprime una línea por día; solo el resumen final.",
     )
+
+    export = subparsers.add_parser(
+        "export",
+        help="Genera el JSON que consume el dashboard.",
+        description=(
+            "Exporta los metadatos del índice a JSON. Nunca los textos completos, "
+            "que viven en el BOE y se enlazan. Por defecto recorta a los últimos "
+            f"{VENTANA_POR_DEFECTO} días más todo lo que coincida con alguna watchlist, "
+            "porque el índice entero son 15.000 registros que un móvil tiene que "
+            "parsear."
+        ),
+    )
+    export.add_argument(
+        "--dias",
+        type=int,
+        metavar="N",
+        default=VENTANA_POR_DEFECTO,
+        help=f"Ventana en días hacia atrás (por defecto {VENTANA_POR_DEFECTO}).",
+    )
+    export.add_argument(
+        "--todo",
+        action="store_true",
+        help="Exporta el índice completo, sin recortar.",
+    )
+    export.add_argument(
+        "--salida",
+        type=Path,
+        metavar="RUTA",
+        help="Dónde escribir el JSON (por defecto dashboard/data.json).",
+    )
     return parser
 
 
@@ -403,6 +479,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "doctor":
         return run_doctor(check_api=args.check_api)
+
+    if args.command == "export":
+        return run_export(dias=None if args.todo else args.dias, salida=args.salida)
 
     if args.command == "ingest":
         return run_ingest(

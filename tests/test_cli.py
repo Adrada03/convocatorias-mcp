@@ -23,6 +23,7 @@ from convocatorias_mcp.cli import (
     check_watchlists,
     main,
     run_doctor,
+    run_export,
     run_ingest,
 )
 from convocatorias_mcp.config import Settings
@@ -292,3 +293,61 @@ def test_ingest_avisa_de_una_configuracion_invalida(entorno_limpio: Path, capsys
 
     assert run_ingest(fuente="fixture") == 1
     assert "Configuración inválida" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# El comando export
+# --------------------------------------------------------------------------- #
+
+
+def test_export_escribe_el_json_del_dashboard(entorno_limpio: Path, capsys, monkeypatch):
+    monkeypatch.chdir(entorno_limpio)
+    run_ingest(fuente="fixture", backfill=30)
+    capsys.readouterr()
+
+    codigo = run_export()
+
+    salida = capsys.readouterr().out
+    assert codigo == 0
+    assert (entorno_limpio / "dashboard" / "data.json").is_file()
+    assert "Escrito" in salida
+    # La cita que exige la licencia tambien sale por consola.
+    assert "Boletín Oficial del Estado" in salida
+
+
+def test_export_acepta_otra_ruta_y_la_ventana(entorno_limpio: Path, capsys, monkeypatch):
+    monkeypatch.chdir(entorno_limpio)
+    run_ingest(fuente="fixture", backfill=30)
+    capsys.readouterr()
+    destino = entorno_limpio / "otro" / "datos.json"
+
+    assert run_export(dias=None, salida=destino) == 0
+
+    assert destino.is_file()
+    assert "todo el índice" in capsys.readouterr().out
+
+
+def test_export_con_el_indice_vacio_avisa(entorno_limpio: Path, capsys, monkeypatch):
+    monkeypatch.chdir(entorno_limpio)
+
+    codigo = run_export(salida=entorno_limpio / "data.json")
+
+    assert codigo == 1
+    assert "ingest" in capsys.readouterr().err
+
+
+def test_export_no_exporta_con_watchlists_rotas(entorno_limpio: Path, capsys, monkeypatch):
+    monkeypatch.chdir(entorno_limpio)
+    (entorno_limpio / "watchlists.yaml").write_text("watchlists: [\n", encoding="utf-8")
+
+    codigo = run_export(salida=entorno_limpio / "data.json")
+
+    assert codigo == 1
+    assert "watchlists.yaml" in capsys.readouterr().err
+
+
+def test_el_parser_acepta_export_con_sus_opciones():
+    args = build_parser().parse_args(["export", "--todo", "--salida", "x.json"])
+    assert args.command == "export"
+    assert args.todo is True
+    assert args.salida == Path("x.json")
