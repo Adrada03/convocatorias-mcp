@@ -47,6 +47,7 @@ DEFAULT_BACKFILL_DIAS = 90
 
 DEFAULT_INDEX_FILENAME = "convocatorias-index.sqlite3"
 DEFAULT_WATCHLISTS_FILENAME = "watchlists.yaml"
+DEFAULT_SINONIMOS_FILENAME = "sinonimos.yaml"
 
 
 class ConfigError(Exception):
@@ -87,6 +88,8 @@ class Settings(BaseModel):
     # --- Rutas ------------------------------------------------------------ #
     watchlists_path: Path
     index_path: Path
+    #: Sinonimos del usuario. Si no existe el fichero se usan los de serie.
+    sinonimos_path: Path | None = None
 
     # --- Ingesta ---------------------------------------------------------- #
     backfill_dias: int = Field(default=DEFAULT_BACKFILL_DIAS, ge=1, le=3650)
@@ -139,9 +142,19 @@ class Settings(BaseModel):
             Path(index_env).expanduser() if index_env else data_dir / DEFAULT_INDEX_FILENAME
         )
 
+        sinonimos_env = env.get("CONVOCATORIAS_SINONIMOS_PATH")
+        if sinonimos_env:
+            sinonimos_path: Path | None = Path(sinonimos_env).expanduser()
+        else:
+            # Sin fichero propio se usan los sinónimos de serie, así que aquí
+            # queda None en vez de una ruta que no existe.
+            local_sinonimos = cwd / DEFAULT_SINONIMOS_FILENAME
+            sinonimos_path = local_sinonimos if local_sinonimos.is_file() else None
+
         return cls(
             watchlists_path=watchlists_path,
             index_path=index_path,
+            sinonimos_path=sinonimos_path,
             backfill_dias=_int_env(env, "CONVOCATORIAS_BACKFILL_DIAS", DEFAULT_BACKFILL_DIAS),
             smtp_host=_clean(env.get("SMTP_HOST")),
             smtp_port=_int_env(env, "SMTP_PORT", 587),

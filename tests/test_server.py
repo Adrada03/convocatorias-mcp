@@ -15,7 +15,9 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import httpx
 import pytest
+import respx
 
 from convocatorias_mcp.config import Settings
 from convocatorias_mcp.db import open_index
@@ -69,6 +71,17 @@ def con_datos(settings: Settings, convocatoria_factory):
     return settings
 
 
+@pytest.fixture
+def descarga_mockeada(documento_boe):
+    """Simula el XML del documento para las llamadas que descargan texto."""
+    with respx.mock:
+        yield respx.get(url__startswith="https://www.boe.es/diario_boe/xml.php").mock(
+            return_value=httpx.Response(
+                200, text=documento_boe, headers={"Content-Type": "application/xml"}
+            )
+        )
+
+
 async def llamar(servidor, nombre: str, argumentos: dict | None = None) -> dict:
     resultado = await servidor.call_tool(nombre, argumentos or {})
     return resultado.structured_content or {}
@@ -95,7 +108,9 @@ async def test_los_tools_estan_descritos_para_un_modelo(servidor):
         # Una descripcion vaga se traduce en llamadas inutiles: se exige que
         # expliquen cuando usarlos, no solo que existen.
         assert len(descripcion) > 120, tool.name
-        assert "Úsalo" in descripcion or "Llámalo" in descripcion, tool.name
+        # Tienen que decir CUANDO usarlos, no solo que existen.
+        guias = ("Úsalo", "Llámalo", "Pídelo", "buena consulta")
+        assert any(guia in descripcion for guia in guias), tool.name
 
 
 async def test_los_tools_se_declaran_de_solo_lectura(servidor):
@@ -181,7 +196,7 @@ async def test_search_explica_un_plazo_desconocido(con_datos, servidor):
 # --------------------------------------------------------------------------- #
 
 
-async def test_get_devuelve_una_convocatoria(con_datos, servidor):
+async def test_get_devuelve_una_convocatoria(con_datos, servidor, descarga_mockeada):
     datos = await llamar(servidor, "get_convocatoria", {"id": "boe:BOE-A-2026-1"})
 
     assert datos["encontrada"] is True
@@ -189,15 +204,55 @@ async def test_get_devuelve_una_convocatoria(con_datos, servidor):
     assert datos["url_oficial"].startswith("https://www.boe.es/")
 
 
-async def test_get_sin_texto_descargado_manda_al_texto_oficial(con_datos, servidor):
+async def test_get_descarga_el_texto_bajo_demanda(con_datos, servidor, descarga_mockeada):
+    # Es el nivel 2 del matching: sin esto el modelo resumiria requisitos que
+    # no ha leido.
     datos = await llamar(servidor, "get_convocatoria", {"id": "boe:BOE-A-2026-1"})
 
+    assert descarga_mockeada.called
+    assert "De acuerdo con lo dispuesto" in datos["texto_completo"]
+    assert "nota_texto" not in datos
+
+
+async def test_get_cachea_el_texto_y_no_lo_vuelve_a_pedir(con_datos, servidor, descarga_mockeada):
+    await llamar(servidor, "get_convocatoria", {"id": "boe:BOE-A-2026-1"})
+    primera = descarga_mockeada.call_count
+
+    datos = await llamar(servidor, "get_convocatoria", {"id": "boe:BOE-A-2026-1"})
+
+    assert descarga_mockeada.call_count == primera == 1
+    assert "De acuerdo con lo dispuesto" in datos["texto_completo"]
+
+
+async def test_si_la_descarga_falla_el_tool_sigue_sirviendo(con_datos, servidor):
+    # Un fallo de red no debe romper la llamada: la convocatoria y su enlace
+    # siguen valiendo, y la nota avisa de que el texto no se ha leido.
+    with respx.mock:
+        respx.get(url__startswith="https://www.boe.es/diario_boe/xml.php").mock(
+            return_value=httpx.Response(503)
+        )
+        datos = await llamar(servidor, "get_convocatoria", {"id": "boe:BOE-A-2026-1"})
+
+    assert datos["encontrada"] is True
     assert datos["texto_completo"] is None
-    assert "no los deduzcas del título" in datos["nota_texto"]
+    assert "no deduzcas sus requisitos" in datos["nota_texto"]
     assert "boe.es" in datos["nota_texto"]
 
 
-async def test_get_devuelve_el_texto_cuando_esta_descargado(
+async def test_una_fuente_que_no_descarga_textos_lo_dice(settings, servidor, convocatoria_factory):
+    conn = open_index(settings.index_path)
+    try:
+        guardar_convocatorias(conn, [convocatoria_factory(fuente="fixture")])
+    finally:
+        conn.close()
+
+    datos = await llamar(servidor, "get_convocatoria", {"id": "fixture:BOE-A-2026-21635"})
+
+    assert datos["texto_completo"] is None
+    assert "no descarga textos completos" in datos["nota_texto"]
+
+
+async def test_get_no_descarga_si_el_texto_ya_esta_en_el_indice(
     settings, servidor, convocatoria_factory
 ):
     conn = open_index(settings.index_path)
@@ -258,7 +313,7 @@ async def test_source_health_funciona_con_el_indice_vacio(servidor):
     ],
 )
 async def test_toda_respuesta_lleva_el_aviso_de_no_elegibilidad(
-    con_datos, servidor, tool, argumentos
+    con_datos, servidor, descarga_mockeada, tool, argumentos
 ):
     datos = await llamar(servidor, tool, argumentos)
     assert datos["aviso"] == AVISO_NO_ELEGIBILIDAD
@@ -273,7 +328,7 @@ async def test_toda_respuesta_lleva_el_aviso_de_no_elegibilidad(
     ],
 )
 async def test_toda_respuesta_lleva_la_cita_que_exige_la_licencia(
-    con_datos, servidor, tool, argumentos
+    con_datos, servidor, descarga_mockeada, tool, argumentos
 ):
     datos = await llamar(servidor, tool, argumentos)
     assert "Boletín Oficial del Estado" in datos["cita_obligatoria"]

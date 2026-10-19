@@ -1,0 +1,40 @@
+# Sinonimos del vocabulario administrativo.
+#
+#   cp sinonimos.example.yaml sinonimos.yaml
+#
+# Los titulos del BOE estan escritos en lenguaje administrativo. Una oposicion
+# no se titula "oposiciones": se titula "Resolucion de 8 de octubre de 2026, de
+# la Subsecretaria, por la que se convoca proceso selectivo para ingreso...".
+#
+# Esta tabla es una RED DE SEGURIDAD, no el mecanismo principal. Lo que de
+# verdad traduce la intencion del usuario al vocabulario del boletin es la
+# descripcion del tool search_convocatorias, que se la lee el modelo. Esto solo
+# evita que una consulta ingenua devuelva cero.
+#
+# Formato: termino coloquial -> terminos que SI aparecen en los titulos.
+# Cada clave SUSTITUYE la de serie, asi que se puede corregir una entrada y no
+# solo anadir. Las que no toques siguen funcionando.
+#
+# Se puede apuntar a otra ruta con CONVOCATORIAS_SINONIMOS_PATH.
+
+# Ejemplos de ampliaciones utiles que no estan de serie:
+
+vivienda:
+  - vivienda protegida
+  - vivienda de proteccion oficial
+  - alquiler
+
+cultura:
+  - cultural
+  - artes
+  - patrimonio
+
+investigacion:
+  - investigacion
+  - proyectos de investigacion
+  - personal investigador
+
+# Y asi se corrige una de serie si no te gusta:
+# oposiciones:
+#   - proceso selectivo
+#   - concurso-oposicion

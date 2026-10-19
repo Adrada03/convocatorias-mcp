@@ -27,9 +27,11 @@ from mcp.types import ToolAnnotations
 from convocatorias_mcp import __version__
 from convocatorias_mcp.config import Settings, hoy_boletin
 from convocatorias_mcp.db import estado_del_indice, open_index
-from convocatorias_mcp.index import buscar, obtener_convocatoria
+from convocatorias_mcp.index import buscar, guardar_texto, obtener_convocatoria
 from convocatorias_mcp.models import AVISO_NO_ELEGIBILIDAD, Convocatoria, SearchFilters, Seccion
-from convocatorias_mcp.sources import FUENTES
+from convocatorias_mcp.sources import FUENTES, crear_fuente
+from convocatorias_mcp.sources.base import SourceError
+from convocatorias_mcp.vocabulario import cargar_sinonimos
 
 __all__ = ["construir_servidor", "main"]
 
@@ -98,9 +100,49 @@ def _resumir(convocatoria: Convocatoria) -> dict[str, Any]:
     }
 
 
+async def _descargar_texto(
+    ajustes: Settings, convocatoria: Convocatoria
+) -> tuple[Convocatoria, str | None]:
+    """Descarga el texto oficial y lo cachea en el índice.
+
+    Devuelve la convocatoria y, si algo salió mal, una nota para el modelo. Un
+    fallo aquí **no es un error del tool**: la convocatoria y su enlace siguen
+    siendo útiles, y lo peor que puede pasar es que el modelo resuma requisitos
+    que no ha leído. Por eso la nota se lo dice explícitamente.
+    """
+    enlace = f"Lee la convocatoria en {convocatoria.url_html} y no deduzcas sus requisitos."
+
+    try:
+        fuente = crear_fuente(convocatoria.fuente)
+    except KeyError:
+        return convocatoria, (
+            f"La fuente {convocatoria.fuente!r} ya no está registrada, así que no se "
+            f"puede descargar el texto. {enlace}"
+        )
+
+    try:
+        con_texto = await fuente.fetch_texto(convocatoria)
+    except SourceError as exc:
+        return convocatoria, f"No se pudo descargar el texto oficial: {exc.message}. {enlace}"
+    finally:
+        await fuente.aclose()
+
+    if not con_texto.texto_descargado:
+        return con_texto, (
+            f"La fuente {convocatoria.fuente!r} no descarga textos completos. {enlace}"
+        )
+
+    with _indice(ajustes) as conn:
+        guardar_texto(conn, con_texto)
+    return con_texto, None
+
+
 def construir_servidor(settings: Settings | None = None) -> MCPServer:
     """Monta el servidor con sus tools. Separado de :func:`main` para los tests."""
     ajustes = settings or Settings.from_env()
+    # Se cargan una vez al arrancar: el fichero del usuario no cambia en
+    # caliente y leerlo en cada búsqueda sería gratuito pero absurdo.
+    sinonimos = cargar_sinonimos(ajustes.sinonimos_path)
     server = MCPServer(
         name="convocatorias",
         title="Convocatorias oficiales",
@@ -124,27 +166,66 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
     ) -> dict[str, Any]:
         """Busca convocatorias en el índice local de boletines oficiales.
 
-        Úsalo para preguntas como "¿hay becas de informática?", "¿qué ha salido
-        esta semana?" u "oposiciones de programador en Madrid". Devuelve
-        metadatos y enlaces, no el texto completo: para leer los requisitos de
-        una convocatoria concreta, llama después a get_convocatoria.
+        Devuelve metadatos y enlaces, no el texto completo: para leer los
+        requisitos de una convocatoria concreta, llama después a
+        get_convocatoria.
 
-        Todos los filtros son opcionales; sin ninguno devuelve lo más reciente.
+        IMPORTANTE: los títulos del BOE están escritos en lenguaje
+        administrativo, no coloquial. Una oposición nunca se titula
+        "oposiciones": se titula "Resolución de 8 de octubre de 2026, de la
+        Subsecretaría, por la que se convoca proceso selectivo para ingreso en
+        el Cuerpo...". Traducir la intención del usuario a ese vocabulario es
+        tu trabajo, y el filtro más potente casi siempre es la sección, no las
+        palabras.
+
+        Qué contiene cada sección:
+
+        - "II.B": empleo público. Procesos selectivos, pruebas selectivas,
+          concursos-oposición, concursos de traslados, listas de admitidos y
+          excluidos, tribunales. Aquí está todo lo que la gente llama
+          "oposiciones".
+        - "III": bases reguladoras y convocatorias de becas, ayudas,
+          subvenciones, premios y convenios. Aquí están las becas de verdad,
+          con sus requisitos.
+        - "V.B": extractos de convocatorias de subvenciones y otros anuncios
+          oficiales. Suele ser la versión corta de algo publicado en III, y es
+          la sección con más volumen.
+        - "V.A": contratación pública. Licitaciones, adjudicaciones y
+          formalizaciones de contratos. Útil para autónomos y empresas, no para
+          quien busca empleo o una beca.
+        - "I", "II.A", "IV", "V.C": normativa general, nombramientos,
+          administración de justicia y anuncios particulares. Rara vez son
+          convocatorias a las que alguien pueda optar.
+
+        Cómo construir una buena consulta:
+
+        - "quiero oposiciones de informática" -> seccion="II.B" y
+          keywords="informatica" (o "sistemas", "telecomunicaciones"). No pases
+          "oposiciones" como keyword: no aparece en los títulos.
+        - "becas para estudiar un máster" -> seccion="III" y keywords="becas".
+        - "¿qué ha salido esta semana?" -> solo desde, sin keywords.
+        - "ayudas para autónomos en Madrid" -> seccion="III" y
+          keywords="autonomos", y revisa el ámbito en los resultados en vez de
+          filtrar por él, que no siempre viene.
+        - Si una búsqueda con varias palabras no devuelve nada, prueba con
+          menos: las keywords se exigen TODAS.
+
+        Hay una tabla pequeña de sinónimos que traduce algunos términos
+        coloquiales ("oposiciones" -> "proceso selectivo"), pero es una red de
+        seguridad y no cubre el idioma entero: no te apoyes en ella.
 
         Args:
-            keywords: Palabras que deben aparecer TODAS en el título. Sin
-                distinguir mayúsculas ni acentos. Usa términos como los
-                escribiría un boletín oficial ("informática", "subvenciones",
-                "funcionarios"), no lenguaje coloquial.
-            seccion: Sección del boletín. Las que traen convocatorias son
-                "II.B" (oposiciones y concursos), "III" (bases reguladoras de
-                becas y subvenciones), "V.A" (licitaciones públicas) y "V.B"
-                (otros anuncios oficiales). Omítela si no estás seguro.
+            keywords: Palabras que deben aparecer TODAS en el título, sin
+                distinguir mayúsculas ni acentos. Usa el vocabulario del
+                boletín, no el del usuario.
+            seccion: Sección del boletín, como "II.B" o "III". Es el filtro más
+                útil; úsalo siempre que la intención del usuario esté clara.
             desde: Fecha de publicación mínima, en formato AAAA-MM-DD.
             hasta: Fecha de publicación máxima, en formato AAAA-MM-DD.
             ambito: Ámbito territorial, por ejemplo "Estatal" o "Madrid". Solo
-                filtra cuando el boletín lo publica, así que puede descartar
-                convocatorias cuyo ámbito no se ha podido determinar.
+                filtra cuando el boletín lo publica, así que descarta las
+                convocatorias cuyo ámbito no se ha podido determinar. Si buscas
+                por zona, suele ser mejor no usarlo y mirar los resultados.
             include_vistas: Por defecto se omiten las ya enviadas en un digest.
                 Ponlo a true si el usuario quiere revisar también esas.
             limite: Máximo de resultados, entre 1 y 200.
@@ -159,7 +240,7 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
             limite=limite,
         )
         with _indice(ajustes) as conn:
-            resultados = buscar(conn, filtros)
+            resultados = buscar(conn, filtros, sinonimos=sinonimos)
             estado = estado_del_indice(conn)
 
         respuesta: dict[str, Any] = {
@@ -188,17 +269,23 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
         title="Leer una convocatoria",
         annotations=SOLO_LECTURA,
     )
-    def get_convocatoria(id: str) -> dict[str, Any]:
-        """Devuelve una convocatoria concreta con su texto oficial si está descargado.
+    async def get_convocatoria(id: str) -> dict[str, Any]:
+        """Devuelve una convocatoria con su TEXTO OFICIAL COMPLETO.
 
-        Llámalo cuando una convocatoria de search_convocatorias parezca encajar y
-        haga falta leer sus requisitos: plazos, titulación, renta, méritos. Esos
-        requisitos vienen en prosa jurídica y hay que leerlos, no deducirlos del
-        título.
+        Llámalo cuando una convocatoria de search_convocatorias parezca encajar
+        y haga falta leer sus requisitos: plazos, titulación, renta, méritos,
+        baremos. Esos requisitos vienen en prosa jurídica y hay que leerlos; no
+        se deducen del título.
 
-        Al resumirlos: di qué pide la convocatoria, señala qué coincide y qué no
-        con el perfil del usuario, y enlaza al texto oficial. No afirmes que
-        cumple los requisitos; esa conclusión no es tuya.
+        La primera vez descarga el texto del boletín y lo guarda, así que la
+        siguiente llamada es instantánea. Pídelo solo de las convocatorias que
+        de verdad interesen: son 15.000 en el índice y descargarlas todas sería
+        abusar de una fuente pública.
+
+        Al resumir: di qué pide la convocatoria, señala qué coincide y qué no
+        con lo que sepas del perfil del usuario, y enlaza siempre al texto
+        oficial. **No afirmes que cumple o no cumple los requisitos**: esa
+        conclusión no es tuya, y equivocarse tiene consecuencias reales.
 
         Args:
             id: El campo "id" de un resultado de search_convocatorias, con el
@@ -216,19 +303,17 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
                 ),
             }
 
+        nota: str | None = None
+        if not convocatoria.texto_descargado:
+            convocatoria, nota = await _descargar_texto(ajustes, convocatoria)
+
         respuesta = _resumir(convocatoria)
         respuesta["encontrada"] = True
+        respuesta["texto_completo"] = convocatoria.texto_completo
         respuesta["aviso"] = AVISO_NO_ELEGIBILIDAD
         respuesta["cita_obligatoria"] = CITA_BOE
-        if convocatoria.texto_descargado:
-            respuesta["texto_completo"] = convocatoria.texto_completo
-        else:
-            respuesta["texto_completo"] = None
-            respuesta["nota_texto"] = (
-                "El texto completo todavía no está descargado en el índice. "
-                f"Lee la convocatoria en {convocatoria.url_html} antes de resumir "
-                "sus requisitos, y no los deduzcas del título."
-            )
+        if nota:
+            respuesta["nota_texto"] = nota
         return respuesta
 
     @server.tool(

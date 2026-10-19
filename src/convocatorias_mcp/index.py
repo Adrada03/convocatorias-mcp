@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterable, Sequence
-from datetime import date, datetime
+from collections.abc import Iterable, Mapping, Sequence
+from datetime import UTC, date, datetime
 
 from convocatorias_mcp.models import (
     Convocatoria,
@@ -31,12 +31,14 @@ from convocatorias_mcp.models import (
     SourceHealth,
     normalize_text,
 )
+from convocatorias_mcp.vocabulario import expandir_keywords
 
 __all__ = [
     "ORDEN_CANONICO_SQL",
     "buscar",
     "fechas_registradas",
     "guardar_convocatorias",
+    "guardar_texto",
     "obtener_convocatoria",
     "registrar_ingesta",
 ]
@@ -118,6 +120,35 @@ def guardar_convocatorias(conn: sqlite3.Connection, convocatorias: Iterable[Conv
     return len(filas)
 
 
+def guardar_texto(conn: sqlite3.Connection, convocatoria: Convocatoria) -> bool:
+    """Cachea el texto completo de una convocatoria ya indexada.
+
+    Devuelve ``True`` si se guardó. El texto de un BOE publicado no cambia, así
+    que esto se escribe una vez y ahorra la petición en todas las consultas
+    siguientes: es la caché que exige el trato educado con la fuente.
+    """
+    if not convocatoria.texto_descargado:
+        return False
+
+    descargado = convocatoria.texto_descargado_at or datetime.now(UTC)
+    cursor = conn.execute(
+        """
+        UPDATE convocatorias
+        SET texto_completo      = :texto,
+            texto_descargado_at = :descargado,
+            actualizado_at      = :ahora
+        WHERE id = :id
+        """,
+        {
+            "id": convocatoria.id,
+            "texto": convocatoria.texto_completo,
+            "descargado": descargado.isoformat(),
+            "ahora": datetime.now().astimezone().isoformat(),
+        },
+    )
+    return cursor.rowcount > 0
+
+
 def registrar_ingesta(conn: sqlite3.Connection, salud: SourceHealth) -> None:
     """Registra el resultado de intentar ingerir un día.
 
@@ -179,19 +210,33 @@ def obtener_convocatoria(conn: sqlite3.Connection, convocatoria_id: str) -> Conv
     return _a_convocatoria(fila) if fila else None
 
 
-def buscar(conn: sqlite3.Connection, filtros: SearchFilters) -> list[Convocatoria]:
+def buscar(
+    conn: sqlite3.Connection,
+    filtros: SearchFilters,
+    *,
+    sinonimos: Mapping[str, tuple[str, ...]] | None = None,
+) -> list[Convocatoria]:
     """Filtro de nivel 1: barato, determinista y sin llamar a ningún modelo.
 
     Compara palabras clave contra el título normalizado (sin acentos ni
     puntuación), que es lo que trae el sumario. No interpreta requisitos: eso es
     el nivel 2, y lo hace el modelo sobre el texto oficial.
+
+    ``sinonimos`` sustituye la tabla de serie de
+    :mod:`convocatorias_mcp.vocabulario`, que traduce términos coloquiales al
+    vocabulario administrativo del boletín.
     """
     condiciones: list[str] = []
     params: list[object] = []
 
-    for palabra in filtros.keyword_list:
-        condiciones.append("c.titulo_normalizado LIKE ?")
-        params.append(f"%{palabra}%")
+    # Todas las palabras tienen que aparecer (AND), pero a cada una le vale
+    # cualquiera de sus variantes (OR): "oposiciones" casa con los títulos que
+    # dicen "proceso selectivo", que es como lo escribe el BOE de verdad.
+    for variantes in expandir_keywords(filtros.keyword_list, sinonimos):
+        condiciones.append(
+            "(" + " OR ".join("c.titulo_normalizado LIKE ?" for _ in variantes) + ")"
+        )
+        params.extend(f"%{variante}%" for variante in variantes)
 
     if filtros.seccion is not None:
         condiciones.append("c.seccion = ?")
