@@ -1,38 +1,30 @@
-# Despliegue del dashboard en GitHub Pages.
+# Ingiere el BOE, exporta el JSON y publica el dashboard en GitHub Pages.
 #
-# PREPARADO PERO NO ACTIVO. Solo se puede lanzar a mano (workflow_dispatch),
-# así que no publica nada hasta que se decida activarlo. Para hacerlo:
+# El índice no se versiona: se guarda en la caché de Actions entre ejecuciones
+# y la ingesta solo pide los días que falten. Si la caché se pierde, rehace la
+# ventana de 30 días, que son treinta peticiones a una API de datos abiertos.
 #
-#   1. Descomentar el disparador `push` de abajo.
-#   2. En Settings > Pages del repositorio, poner "Source: GitHub Actions".
-#   3. Añadir el fichero `dashboard/CNAME` con una sola línea:
-#        convocatorias.alvaroadrada.dev
-#      y apuntar ese subdominio por CNAME a <usuario>.github.io.
+# El User-Agent identificado y el retardo entre peticiones se mantienen aquí
+# igual que en local. No porque el BOE lo exija, sino por cortesía: desde CI es
+# igual de fácil ser educado.
 #
-# QUEDA UNA DECISIÓN POR TOMAR, y es la de verdad: `dashboard/data.json` está
-# en .gitignore, porque se genera desde el índice local. Este workflow publica
-# lo que haya en `dashboard/`, así que antes de activarlo hay que elegir de
-# dónde sale ese fichero:
+# NOTA: watchlists.yaml no está versionado, así que el dashboard público sale
+# sin watchlists ni scores. Es lo correcto: las watchlists dicen a qué aspira
+# una persona concreta, y eso no se publica. El sitio enseña los últimos 30
+# días del BOE, que es información pública.
 #
-#   a) Versionarlo: quitarlo del .gitignore y hacer `convocatorias-mcp export`
-#      antes de cada commit. Simple, pero mete 1,7 MB en cada cambio.
-#   b) Generarlo en CI con una ingesta programada. Son ~90 peticiones al BOE en
-#      el primer arranque y unas pocas al día después; habría que respetar el
-#      mismo rate limiting y no lanzarlo en cada push.
-#   c) Subirlo como artefacto desde la máquina del usuario.
-#
-# Mientras no se decida, el dashboard se usa en local:
-#   convocatorias-mcp export && python -m http.server -d dashboard 8000
+# PENDIENTE DE ACTIVAR: hay que poner "Source: GitHub Actions" en Settings >
+# Pages. Hasta entonces el despliegue falla, que es el comportamiento correcto
+# para algo que todavía no se ha decidido publicar.
 
-name: Dashboard (GitHub Pages)
+name: Dashboard
 
 on:
+  schedule:
+    # 07:00 UTC: el BOE publica a primera hora, así que con el cambio de hora
+    # esto cae entre las 08:00 y las 09:00 de Madrid.
+    - cron: "0 7 * * *"
   workflow_dispatch:
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     - "dashboard/**"
-  #     - ".github/workflows/pages.yml"
 
 permissions:
   contents: read
@@ -44,26 +36,66 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+env:
+  CONVOCATORIAS_INDEX_PATH: ${{ github.workspace }}/.cache/convocatorias-index.sqlite3
+
 jobs:
-  deploy:
+  publicar:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.despliegue.outputs.page_url }}
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Comprobar que hay datos que publicar
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Instalar
+        run: pip install -e .
+
+      - name: Restaurar el índice
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          # La clave lleva el run_id para guardar una entrada nueva cada día;
+          # restore-keys recupera la más reciente que haya.
+          key: indice-boe-${{ github.run_id }}
+          restore-keys: |
+            indice-boe-
+
+      - name: Ingerir lo que falte
+        # Incremental: las fechas ya resueltas no se vuelven a pedir, así que
+        # un día normal son una o dos peticiones. Si la caché se perdió, 30.
+        run: convocatorias-mcp ingest --backfill 30
+
+      - name: Exportar el JSON del dashboard
+        run: convocatorias-mcp export
+
+      - name: Comprobar que hay algo que publicar
         run: |
-          if [ ! -f dashboard/data.json ]; then
-            echo "Falta dashboard/data.json: el dashboard se publicaria vacio." >&2
-            echo "Genéralo con 'convocatorias-mcp export' o decide de dónde sale." >&2
-            exit 1
-          fi
+          python - <<'PY'
+          import json, pathlib, sys
+          datos = json.loads(pathlib.Path("dashboard/data.json").read_text(encoding="utf-8"))
+          total = len(datos["convocatorias"])
+          print(f"{total} convocatorias, datos hasta {datos['cubre_hasta']}")
+          if total == 0:
+              sys.exit("El export salio vacio: no se publica un dashboard sin datos.")
+          PY
+
+      # Para activar el dominio propio, descomentar. El DNS tiene que apuntar
+      # convocatorias.alvaroadrada.dev por CNAME a <usuario>.github.io antes,
+      # o GitHub rechazará el dominio.
+      # - name: Dominio propio
+      #   run: cp CNAME.pendiente dashboard/CNAME
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dashboard
-      - id: deployment
+      - id: despliegue
         uses: actions/deploy-pages@v4
