@@ -462,9 +462,12 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
         # departamento, nunca con el texto completo.
         if config_activa:
             solo = WatchlistsConfig(watchlists=[seleccionada]) if seleccionada else config
-            resultados = rankear(resultados, solo, solo_coincidentes=bool(seleccionada))[
-                : filtros.limite
-            ]
+            resultados = rankear(
+                resultados,
+                solo,
+                sinonimos=sinonimos,
+                solo_coincidentes=bool(seleccionada),
+            )[: filtros.limite]
 
         respuesta: dict[str, Any] = {
             "total": len(resultados),

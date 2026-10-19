@@ -51,15 +51,44 @@ def test_una_keyword_solo_en_el_departamento_puntua_menos(convocatoria_factory):
     assert bajo.keywords_encontradas == ["informatica"]
 
 
-def test_sin_ninguna_keyword_el_score_baja_pero_la_seccion_suma(convocatoria_factory):
+def test_con_keywords_la_seccion_no_basta_por_si_sola(convocatoria_factory):
+    """La regla que evita que una watchlist sea un alias de su sección.
+
+    Una watchlist que vigila III con la keyword "informatica" no está pidiendo
+    las 2.255 convocatorias de la sección. Es una regla y no un umbral
+    numérico a propósito: un min_score colocado justo por encima de
+    "solo-sección" solo funcionaría con los pesos actuales y dejaría de
+    hacerlo en silencio al cambiarlos.
+    """
     convocatoria = convocatoria_factory(titulo="Subvenciones a la ganadería", seccion=Seccion.III)
+
+    assert puntuar(convocatoria, BECAS) is None
+
+
+def test_sin_keywords_la_seccion_si_es_el_criterio(convocatoria_factory):
+    # Quien no declara keywords está pidiendo la sección entera, y eso vale.
+    solo_seccion = Watchlist(nombre="todo-iii", secciones=["III"])
+    convocatoria = convocatoria_factory(titulo="Subvenciones a la ganadería", seccion=Seccion.III)
+
+    match = puntuar(convocatoria, solo_seccion)
+
+    assert match is not None
+    assert match.total == 1.0
+
+
+def test_una_keyword_en_el_contexto_basta_para_entrar(convocatoria_factory):
+    # No hace falta que esté en el título: con el departamento vale para pasar
+    # el filtro, aunque puntúe menos.
+    convocatoria = convocatoria_factory(
+        titulo="Resolución de concesión de ayudas",
+        departamento="MINISTERIO DE INFORMÁTICA",
+        seccion=Seccion.III,
+    )
 
     match = puntuar(convocatoria, BECAS)
 
     assert match is not None
-    assert match.keywords_ausentes == ["informatica"]
-    # Solo aporta la sección: 0.25 sobre los 0.80 de peso que cuentan.
-    assert 0.30 < match.total < 0.35
+    assert match.keywords_encontradas == ["informatica"]
 
 
 def test_una_seccion_no_vigilada_es_una_exclusion_no_un_cero(convocatoria_factory):
@@ -69,11 +98,21 @@ def test_una_seccion_no_vigilada_es_una_exclusion_no_un_cero(convocatoria_factor
     assert puntuar(convocatoria, BECAS) is None
 
 
-def test_el_min_score_corta_el_ruido(convocatoria_factory):
-    convocatoria = convocatoria_factory(titulo="Subvenciones a la ganadería", seccion=Seccion.III)
-    exigente = Watchlist(nombre="becas", keywords=["informatica"], secciones=["III"], min_score=0.5)
+def test_el_min_score_sigue_siendo_un_filtro_opcional(convocatoria_factory):
+    # Coincide una de dos keywords, y solo en el departamento: entra por la
+    # regla, pero un min_score alto la descarta igualmente.
+    convocatoria = convocatoria_factory(
+        titulo="Resolución de concesión de ayudas",
+        departamento="MINISTERIO DE INFORMÁTICA",
+        seccion=Seccion.III,
+    )
+    # Keywords sin sinónimos, para que el test mida el min_score y no la
+    # expansión del vocabulario.
+    claves = ["informatica", "telecomunicaciones"]
+    permisiva = Watchlist(nombre="becas", keywords=claves, secciones=["III"])
+    exigente = Watchlist(nombre="becas", keywords=claves, secciones=["III"], min_score=0.6)
 
-    assert puntuar(convocatoria, BECAS) is not None
+    assert puntuar(convocatoria, permisiva) is not None
     assert puntuar(convocatoria, exigente) is None
 
 
@@ -147,7 +186,12 @@ def test_el_scoring_no_usa_el_texto_completo(convocatoria_factory):
 
 
 def test_los_pesos_se_pueden_afinar(convocatoria_factory):
-    convocatoria = convocatoria_factory(titulo="Subvenciones a la ganadería", seccion=Seccion.III)
+    # Una que entra por el departamento: al dar más peso a la sección, sube.
+    convocatoria = convocatoria_factory(
+        titulo="Resolución de concesión de ayudas",
+        departamento="MINISTERIO DE INFORMÁTICA",
+        seccion=Seccion.III,
+    )
 
     por_defecto = puntuar(convocatoria, BECAS)
     con_seccion_mas_pesada = puntuar(

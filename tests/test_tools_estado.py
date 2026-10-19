@@ -289,7 +289,10 @@ async def test_la_busqueda_ordena_por_score_cuando_hay_watchlists(con_datos, con
     assert datos["resultados"][0]["score"] == 1.0
     assert datos["resultados"][0]["watchlists"] == ["empleo-tic"]
     assert datos["resultados"][1]["watchlists"] == ["becas-informatica"]
-    assert datos["resultados"][2]["score"] is not None
+    # La de ganadería está en una sección vigilada pero no casa ninguna
+    # keyword, así que no coincide con ninguna watchlist y se va al final.
+    assert datos["resultados"][2]["watchlists"] == []
+    assert datos["resultados"][2]["score"] is None
 
 
 async def test_el_orden_con_watchlists_es_estable(con_datos, con_watchlists):

@@ -16,6 +16,7 @@ la lógica.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from convocatorias_mcp.models import (
@@ -26,6 +27,7 @@ from convocatorias_mcp.models import (
     WatchlistsConfig,
     normalize_text,
 )
+from convocatorias_mcp.vocabulario import expandir_keyword
 
 __all__ = ["PESOS_POR_DEFECTO", "Pesos", "puntuar", "rankear"]
 
@@ -63,6 +65,7 @@ def puntuar(
     watchlist: Watchlist,
     *,
     pesos: Pesos = PESOS_POR_DEFECTO,
+    sinonimos: Mapping[str, tuple[str, ...]] | None = None,
 ) -> MatchScore | None:
     """Puntúa una convocatoria contra una watchlist.
 
@@ -95,14 +98,32 @@ def puntuar(
     )
 
     if watchlist.keywords:
-        en_titulo = [palabra for palabra in watchlist.keywords if palabra in titulo]
-        en_contexto = [
-            palabra
-            for palabra in watchlist.keywords
-            if palabra not in en_titulo and palabra in contexto
-        ]
+        # Se busca con las mismas variantes que usa el filtro SQL: si una
+        # convocatoria entra en los resultados porque su título dice "proceso
+        # selectivo" cuando la keyword es "oposiciones", el scoring tiene que
+        # verlo también. Si no, el filtro la encuentra y el ranking la descarta.
+        en_titulo: list[str] = []
+        en_contexto: list[str] = []
+        for palabra in watchlist.keywords:
+            variantes = expandir_keyword(palabra, sinonimos)
+            if any(variante in titulo for variante in variantes):
+                en_titulo.append(palabra)
+            elif any(variante in contexto for variante in variantes):
+                en_contexto.append(palabra)
+
         encontradas = en_titulo + en_contexto
         ausentes = [palabra for palabra in watchlist.keywords if palabra not in encontradas]
+
+        # Filtro duro: si la watchlist declara palabras clave, al menos una
+        # tiene que aparecer. La sección sigue filtrando y sumando al score,
+        # pero no basta por sí sola: una watchlist que vigila II.B con tres
+        # keywords no está pidiendo las 2.255 convocatorias de la sección.
+        #
+        # Es una regla y no un umbral numérico a propósito. Un min_score
+        # colocado "justo por encima de solo-sección" solo funcionaría con los
+        # pesos actuales y dejaría de hacerlo en silencio al cambiarlos.
+        if not encontradas:
+            return None
 
         total = len(watchlist.keywords)
         componentes.append(
@@ -222,6 +243,7 @@ def rankear(
     config: WatchlistsConfig | None,
     *,
     pesos: Pesos = PESOS_POR_DEFECTO,
+    sinonimos: Mapping[str, tuple[str, ...]] | None = None,
     solo_coincidentes: bool = False,
 ) -> list[Convocatoria]:
     """Puntúa una lista contra todas las watchlists y la ordena.
@@ -241,7 +263,8 @@ def rankear(
         matches = [
             match
             for match in (
-                puntuar(convocatoria, watchlist, pesos=pesos) for watchlist in config.watchlists
+                puntuar(convocatoria, watchlist, pesos=pesos, sinonimos=sinonimos)
+                for watchlist in config.watchlists
             )
             if match is not None
         ]
