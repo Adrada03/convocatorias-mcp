@@ -1,0 +1,58 @@
+{
+    "status": {
+        "code": "200",
+        "text": "ok"
+    },
+    "data": {
+        "sumario": {
+            "metadatos": {
+                "publicacion": "BOE",
+                "fecha_publicacion": "20260726"
+            },
+            "diario": [
+                {
+                    "numero": "181",
+                    "sumario_diario": {
+                        "identificador": "BOE-S-2026-181",
+                        "url_pdf": {
+                            "szBytes": "142084",
+                            "szKBytes": "139",
+                            "texto": "https:\/\/www.boe.es\/boe\/dias\/2026\/07\/26\/pdfs\/BOE-S-2026-181.pdf"
+                        }
+                    },
+                    "seccion": {
+                        "codigo": "1",
+                        "nombre": "I. Disposiciones generales",
+                        "texto": {
+                            "departamento": {
+                                "codigo": "7320",
+                                "nombre": "MINISTERIO DEL INTERIOR",
+                                "texto": {
+                                    "epigrafe": [
+                                        {
+                                            "nombre": "Emergencia de inter\u00e9s nacional",
+                                            "item": {
+                                                "identificador": "BOE-A-2026-16247",
+                                                "control": "2026\/12296",
+                                                "titulo": "Orden INT\/762\/2026, de 25 de julio, por la que se ampl\u00eda a la provincia de Toledo el \u00e1mbito territorial de la declaraci\u00f3n de emergencia de inter\u00e9s nacional declarada por la Orden INT\/748\/2026, de 23 de julio, por la que se declara la emergencia de inter\u00e9s nacional en el territorio de la Comunidad de Madrid y en la provincia de \u00c1vila como consecuencia de los incendios forestales.",
+                                                "url_pdf": {
+                                                    "szBytes": "193385",
+                                                    "szKBytes": "189",
+                                                    "pagina_inicial": "105572",
+                                                    "pagina_final": "105572",
+                                                    "texto": "https:\/\/www.boe.es\/boe\/dias\/2026\/07\/26\/pdfs\/BOE-A-2026-16247.pdf"
+                                                },
+                                                "url_html": "https:\/\/www.boe.es\/diario_boe\/txt.php?id=BOE-A-2026-16247",
+                                                "url_xml": "https:\/\/www.boe.es\/diario_boe\/xml.php?id=BOE-A-2026-16247"
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    }
+}

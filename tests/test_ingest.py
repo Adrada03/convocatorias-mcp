@@ -84,12 +84,12 @@ def test_un_rango_al_reves_esta_vacio():
 async def test_ingiere_el_sumario_real_y_registra_el_dia(conn):
     resumen = await ingerir(conn, FixtureSource(), desde=FECHA_CON_SUMARIO, hasta=FECHA_CON_SUMARIO)
 
-    assert resumen.convocatorias == 270
+    assert resumen.convocatorias == 271
     assert resumen.dias_pedidos == 1
     assert not resumen.errores
 
     estado = estado_del_indice(conn)
-    assert estado.convocatorias == 270
+    assert estado.convocatorias == 271
     assert estado.dias_ok == 1
     assert estado.ultima_fecha == FECHA_CON_SUMARIO
 
@@ -100,7 +100,7 @@ async def test_los_dias_sin_sumario_se_registran_como_sin_publicacion(conn):
     )
 
     assert resumen.dias_sin_publicacion == 2
-    assert resumen.convocatorias == 270
+    assert resumen.convocatorias == 271
     # Y no cuentan como error: la fuente esta sana.
     assert not resumen.errores
     assert estado_del_indice(conn).dias_con_error == 0
@@ -115,7 +115,7 @@ async def test_reingerir_no_duplica_ni_vuelve_a_pedir(conn):
     assert segunda.dias_pedidos == 0
     assert segunda.dias_omitidos == 1
     assert segunda.convocatorias == 0
-    assert estado_del_indice(conn).convocatorias == 270
+    assert estado_del_indice(conn).convocatorias == 271
 
 
 async def test_forzar_vuelve_a_pedir_las_fechas_resueltas(conn):
@@ -127,9 +127,9 @@ async def test_forzar_vuelve_a_pedir_las_fechas_resueltas(conn):
     )
 
     assert segunda.dias_pedidos == 1
-    assert segunda.convocatorias == 270
+    assert segunda.convocatorias == 271
     # Sigue sin duplicar: la clave es el identificador oficial.
-    assert estado_del_indice(conn).convocatorias == 270
+    assert estado_del_indice(conn).convocatorias == 271
 
 
 # --------------------------------------------------------------------------- #
@@ -176,5 +176,5 @@ async def test_el_resumen_se_lee_en_una_linea(conn):
         conn, FixtureSource(), desde=date(2026, 10, 16), hasta=date(2026, 10, 18)
     )
     texto = resumen.resumen()
-    assert "270 convocatorias" in texto
+    assert "271 convocatorias" in texto
     assert "sin publicación" in texto

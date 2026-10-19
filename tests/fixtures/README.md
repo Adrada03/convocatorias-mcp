@@ -13,7 +13,7 @@ respetando el retardo entre peticiones.
 
 | Fichero | Origen | Capturado | Qué cubre |
 |---|---|---|---|
-| `boe_sumario_20261017.json` | `GET /datosabiertos/api/boe/sumario/20261017` | 2026-10-19 | Sumario completo de un día con publicación: 270 items en 7 secciones (`1`, `2A`, `2B`, `3`, `4`, `5B`, `5C`). Incluye items sin epígrafe y sin número de expediente, y `url_pdf` como objeto en vez de cadena. |
+| `boe_sumario_20261017.json` | `GET /datosabiertos/api/boe/sumario/20261017` | 2026-10-19 | Sumario completo de un día con publicación: 271 items en 7 secciones (`1`, `2A`, `2B`, `3`, `4`, `5B`, `5C`). Incluye items sin epígrafe y sin número de expediente, y `url_pdf` como objeto en vez de cadena. |
 | `boe_sumario_sin_publicacion.json` | `GET /datosabiertos/api/boe/sumario/20261018` | 2026-10-19 | Respuesta de un domingo: HTTP 404 con cuerpo **XML**, aunque la petición pida JSON. Es ausencia de publicación, no un error. |
 | `boe_documento.xml` | `GET /diario_boe/xml.php?id=BOE-A-2026-21635` | 2026-10-19 | Documento individual con su texto completo, para el nivel 2 del matching. Trae metadatos que el sumario no da: `rango`, `fecha_disposicion` y `analisis`. |
 

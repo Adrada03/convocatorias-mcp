@@ -76,7 +76,7 @@ async def test_fetch_dia_mapea_el_sumario_real(sumario_boe):
     async with BoeSource(min_delay=0) as fuente:
         convocatorias = await fuente.fetch_dia(FECHA)
 
-    assert len(convocatorias) == 270
+    assert len(convocatorias) == 271
     assert all(convocatoria.fuente == "boe" for convocatoria in convocatorias)
     assert all(convocatoria.fecha_publicacion == FECHA for convocatoria in convocatorias)
     # Los ids llevan el prefijo de la fuente real, no el de la de desarrollo.

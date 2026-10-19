@@ -9,6 +9,7 @@ verdad.
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from convocatorias_mcp.sources.sumario import (
     parsear_sumario,
 )
 
+FIXTURES = Path(__file__).parent / "fixtures"
 FECHA_FIXTURE = date(2026, 10, 17)
 
 
@@ -34,8 +36,8 @@ FECHA_FIXTURE = date(2026, 10, 17)
 def test_parsea_el_sumario_real_completo(sumario_boe):
     convocatorias = parsear_sumario(sumario_boe, fuente="boe")
 
-    # El dia 17/10/2026 publico 270 items; si cambia el parser, cambia esto.
-    assert len(convocatorias) == 270
+    # El dia 17/10/2026 publico 271 items; si cambia el parser, cambia esto.
+    assert len(convocatorias) == 271
     assert all(convocatoria.fuente == "boe" for convocatoria in convocatorias)
     assert all(convocatoria.fecha_publicacion == FECHA_FIXTURE for convocatoria in convocatorias)
 
@@ -201,7 +203,7 @@ def test_una_fecha_mal_formada_en_los_metadatos_no_rompe():
 
 async def test_la_fuente_de_fixtures_lee_el_sumario_guardado():
     convocatorias = await FixtureSource().fetch_dia(FECHA_FIXTURE)
-    assert len(convocatorias) == 270
+    assert len(convocatorias) == 271
     assert all(convocatoria.fuente == "fixture" for convocatoria in convocatorias)
 
 
@@ -243,3 +245,49 @@ async def test_un_json_valido_que_no_es_sumario_da_source_error(tmp_path: Path):
 def test_un_directorio_que_no_existe_hace_la_fuente_no_disponible(tmp_path: Path):
     assert not FixtureSource(directorio=tmp_path / "no-existe").is_available()
     assert FixtureSource().is_available()
+
+
+# --------------------------------------------------------------------------- #
+# La forma con envoltorio "texto"
+# --------------------------------------------------------------------------- #
+
+
+def test_parsea_el_sumario_con_envoltorio_texto():
+    """Algunos sumarios meten un nivel ``texto`` entre un nodo y sus hijos.
+
+    Salio en el backfill real: el domingo 26/07/2026 el BOE si publico (edicion
+    181, por la emergencia de incendios) y devolvio 200 con esta forma. El
+    parser no veia ningun item.
+    """
+    payload = json.loads((FIXTURES / "boe_sumario_20260726.json").read_text(encoding="utf-8"))
+
+    convocatorias = parsear_sumario(payload, fuente="boe")
+
+    assert len(convocatorias) == 1
+    convocatoria = convocatorias[0]
+    assert convocatoria.identificador == "BOE-A-2026-16247"
+    assert convocatoria.seccion is Seccion.I
+    assert convocatoria.departamento == "MINISTERIO DEL INTERIOR"
+    assert convocatoria.epigrafe == "Emergencia de interés nacional"
+    assert convocatoria.url_pdf is not None
+
+
+def test_el_envoltorio_tambien_aparece_en_los_sumarios_normales(sumario_boe):
+    # El del 17/10 lo trae en la seccion V.C: sin manejarlo se perdia un anuncio
+    # en silencio, que es el peor fallo posible en un indice.
+    convocatorias = parsear_sumario(sumario_boe, fuente="boe")
+    identificadores = {c.identificador for c in convocatorias}
+    assert "BOE-B-2026-33897" in identificadores
+    assert any(c.seccion is Seccion.V_C for c in convocatorias)
+
+
+def test_un_envoltorio_que_no_es_un_mapa_no_rompe():
+    payload = {
+        "data": {
+            "sumario": {
+                "metadatos": {"fecha_publicacion": "20261017"},
+                "diario": [{"seccion": [{"codigo": "3", "texto": "una cadena"}]}],
+            }
+        }
+    }
+    assert parsear_sumario(payload, fuente="boe") == []

@@ -9,11 +9,10 @@ Dos formas de usarlo: **conversando con Claude** (Desktop o Code) en lenguaje
 natural, y como **digest diario por email** con lo nuevo y lo que vence pronto.
 Más un dashboard estático para consultar sin instalar nada.
 
-> **Estado: en construcción.** Funciona end-to-end en Claude Desktop contra un
-> sumario real del BOE guardado en disco: modelo de dominio, índice SQLite,
-> ingesta incremental, servidor MCP con tres tools y el comando `doctor`.
-> Pendiente: fuente del BOE en vivo, watchlists y ranking, plazos, digest por
-> email y dashboard.
+> **Estado: en construcción.** Funciona end-to-end contra el BOE real: el
+> índice local tiene 14.933 convocatorias de los últimos 90 días, con servidor
+> MCP, ingesta incremental y el comando `doctor`. Pendiente: watchlists y
+> ranking, extracción de plazos, digest por email y dashboard.
 
 <!-- TODO: GIF de Claude usando el servidor en vivo -->
 
@@ -121,20 +120,23 @@ ellos.
 | Comando | Qué hace |
 |---|---|
 | `convocatorias-mcp` | Arranca el servidor MCP por stdio. Es como lo invoca Claude Desktop. |
-| `convocatorias-mcp ingest [--backfill N] [--forzar]` | Puebla el índice con los sumarios que falten. Incremental: no repite fechas ya resueltas. |
+| `convocatorias-mcp ingest [--backfill N] [--fuente X] [--forzar]` | Puebla el índice con los sumarios que falten. Incremental: no repite fechas ya resueltas, pero sí reintenta las que fallaron. Imprime una línea por día. |
 | `convocatorias-mcp doctor [--check-api]` | Revisa la instalación. |
 
-### La fuente de hoy es un sumario guardado
+### La fuente de desarrollo
 
-Mientras se implementa la fuente del BOE en vivo, la única fuente registrada es
-`FixtureSource`, que lee el sumario real del 17/10/2026 desde
-`tests/fixtures/`. Sirve para probar el servidor completo sin red y sin depender
-de que el BOE publique hoy.
+Además del BOE hay una fuente `fixture` que lee sumarios guardados en
+`tests/fixtures/`. No toca la red, así que sirve para desarrollar y para que
+cualquiera pruebe el proyecto entero sin depender de que el BOE publique hoy:
 
-Eso tiene una consecuencia a tener en cuenta: los ids de esas convocatorias
-empiezan por `fixture:` en vez de `boe:`. Cuando entre la fuente real conviene
-borrar el índice y volver a ingerir, para no quedarse con la misma convocatoria
-duplicada bajo dos ids. La ruta del índice la dice `convocatorias-mcp doctor`.
+```bash
+convocatorias-mcp ingest --fuente fixture
+```
+
+Sus ids empiezan por `fixture:` en vez de `boe:`, porque el prefijo de la
+fuente forma parte del id. Si habías poblado el índice con ella, bórralo antes
+de ingerir el BOE real para no quedarte con la misma convocatoria bajo dos ids.
+La ruta del índice la dice `convocatorias-mcp doctor`.
 
 ## Diseño en una frase
 
@@ -176,7 +178,7 @@ La arquitectura sobrevivió al cambio sin tocarse: la interfaz de fuente, el
 
 | Fuente | Estado | Método | Consentimiento |
 |---|---|---|---|
-| **BOE** (Boletín Oficial del Estado) | En desarrollo | API de datos abiertos | Datos abiertos con licencia de reutilización |
+| **BOE** (Boletín Oficial del Estado) | Funcionando | API de datos abiertos | Datos abiertos con licencia de reutilización |
 | Boletines autonómicos (BOCM, BOJA, DOGC…) | Pendiente | Por verificar | Por verificar |
 
 Los autonómicos **no están implementados**: antes hay que comprobar si ofrecen
@@ -197,10 +199,19 @@ no permite buscar: de ahí que haga falta un índice local.
 Verificado con peticiones reales el 19/10/2026, con el User-Agent de este
 proyecto:
 
-- El sumario del 17/10/2026 trae 270 items en 7 secciones (313 KB de JSON).
-- Los domingos responden `404` con cuerpo XML. **Eso no es un error**: es
-  ausencia de publicación, y se registra como tal para no ensuciar la salud de
-  la fuente ni reintentar la fecha para siempre.
+- El sumario del 17/10/2026 trae 271 items en 7 secciones (313 KB de JSON).
+- Los domingos responden normalmente `404`, con cuerpo XML aunque pidas JSON.
+  **Eso no es un error**: es ausencia de publicación, y se registra como tal
+  para no ensuciar la salud de la fuente ni reintentar la fecha para siempre.
+- **Pero no todos los domingos.** En el backfill de 90 días, 11 domingos
+  devolvieron `404` y 2 devolvieron `200` con contenido: el BOE publicó
+  ediciones extraordinarias el 26/07 y el 09/08/2026, por la emergencia de
+  incendios y por controles fronterizos.
+- Esos dos sumarios llegan además **con otra forma**: un nivel `texto` extra
+  entre `seccion` y `departamento`, y entre `departamento` y `epigrafe`. El
+  parser maneja las dos, y resultó que el envoltorio también aparecía en los
+  sumarios normales (en la sección V.C), donde estaba perdiendo un anuncio en
+  silencio.
 - `robots.txt` (494 KB) permite el acceso a la API y no excluye a ningún agente
   de IA.
 - Solo admite `GET`; un `POST` devuelve `403`.

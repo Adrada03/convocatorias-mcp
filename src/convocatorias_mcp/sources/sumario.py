@@ -42,6 +42,29 @@ def _como_lista(valor: Any) -> list[Any]:
     return [valor]
 
 
+def _hijos(nodo: Any, clave: str) -> list[Any]:
+    """Hijos de un nodo, con o sin el envoltorio ``texto``.
+
+    Algunos sumarios meten un nivel ``texto`` entre un nodo y sus hijos:
+    ``seccion.texto.departamento`` en vez de ``seccion.departamento``, y
+    ``departamento.texto.epigrafe`` en vez de ``departamento.epigrafe``.
+
+    Lo descubrí en el backfill real: los domingos 26/07/2026 y 09/08/2026 el
+    BOE sí publicó (ediciones 181 y 194, por emergencias de incendios y
+    controles fronterizos) y devolvió 200 con esta forma. El parser no veía
+    ningún item y el canario de "sumario vacío" lo cazó.
+    """
+    if not isinstance(nodo, dict):
+        return []
+    directos = _como_lista(nodo.get(clave))
+    if directos:
+        return directos
+    envoltorio = nodo.get("texto")
+    if isinstance(envoltorio, dict):
+        return _como_lista(envoltorio.get(clave))
+    return []
+
+
 def _sumario_de(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ParseoSumarioError(f"se esperaba un objeto JSON, no {type(payload).__name__}")
@@ -84,16 +107,16 @@ def parsear_sumario(payload: Any, *, fuente: str, fecha: date | None = None) -> 
         for seccion in _como_lista(diario.get("seccion")):
             codigo = seccion.get("codigo")
             nombre_seccion = seccion.get("nombre")
-            for departamento in _como_lista(seccion.get("departamento")):
+            for departamento in _hijos(seccion, "departamento"):
                 nombre_departamento = departamento.get("nombre")
 
                 # Los items pueden estar bajo un epígrafe o directamente bajo el
                 # departamento. Se recorren los dos sitios.
                 bloques: list[tuple[str | None, list[Any]]] = [
-                    (epigrafe.get("nombre"), _como_lista(epigrafe.get("item")))
-                    for epigrafe in _como_lista(departamento.get("epigrafe"))
+                    (epigrafe.get("nombre"), _hijos(epigrafe, "item"))
+                    for epigrafe in _hijos(departamento, "epigrafe")
                 ]
-                bloques.append((None, _como_lista(departamento.get("item"))))
+                bloques.append((None, _hijos(departamento, "item")))
 
                 for nombre_epigrafe, items in bloques:
                     for item in items:

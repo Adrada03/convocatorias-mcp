@@ -320,7 +320,7 @@ def test_ingest_puebla_el_indice(entorno_limpio: Path, capsys):
 
     salida = capsys.readouterr().out
     assert codigo == 0
-    assert "270 convocatorias" in salida
+    assert "271 convocatorias" in salida
     assert "sin publicación" in salida
     assert (entorno_limpio / "indice.sqlite3").is_file()
 
