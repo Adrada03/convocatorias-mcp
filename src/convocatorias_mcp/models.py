@@ -126,6 +126,18 @@ class Seccion(StrEnum):
         """
         return self in (Seccion.II_B, Seccion.III, Seccion.V_A, Seccion.V_B)
 
+    @property
+    def orden(self) -> int:
+        """Posición de la sección en el boletín, para ordenar de forma estable.
+
+        No se usa el orden alfabético del valor aunque coincida: que ``"II.B"``
+        vaya antes de ``"III"`` en ASCII es una casualidad del punto, y una
+        sección nueva podría romperla sin que nadie se diera cuenta. Hay un
+        test que comprueba que ambos órdenes siguen coincidiendo, porque la
+        consulta SQL ordena por el texto.
+        """
+        return _SECCION_ORDEN.get(self, 99)
+
     @classmethod
     def from_api_code(cls, codigo: str | None) -> Seccion:
         """Traduce el código del sumario (``"2B"``) a la sección (``II.B``)."""
@@ -165,6 +177,18 @@ _SECCION_A_API: dict[Seccion, str] = {
 }
 
 _API_A_SECCION: dict[str, Seccion] = {codigo: seccion for seccion, codigo in _SECCION_A_API.items()}
+
+_SECCION_ORDEN: dict[Seccion, int] = {
+    Seccion.I: 0,
+    Seccion.II_A: 1,
+    Seccion.II_B: 2,
+    Seccion.III: 3,
+    Seccion.IV: 4,
+    Seccion.V_A: 5,
+    Seccion.V_B: 6,
+    Seccion.V_C: 7,
+    Seccion.DESCONOCIDA: 99,
+}
 
 _SECCION_DESCRIPCION: dict[Seccion, str] = {
     Seccion.I: "I. Disposiciones generales",
@@ -417,6 +441,21 @@ class Convocatoria(BaseModel):
     def score(self) -> float | None:
         """Mejor score entre todas las watchlists, o ``None`` si no hay ninguna."""
         return max((match.total for match in self.matches), default=None)
+
+    @property
+    def clave_orden(self) -> tuple[int, int, str]:
+        """Clave de orden canónico, estable entre ejecuciones.
+
+        El BOE no publica hora, así que la fecha sola deja empatadas a las 270
+        convocatorias de un mismo día y el orden quedaría a merced de lo que
+        devolviera la base de datos. El desempate es sección y luego
+        identificador oficial, los dos deterministas.
+
+        La fecha va negada para que un ``sorted()`` normal dé directamente el
+        orden de presentación: lo más reciente primero y, dentro del día, por
+        sección ascendente. Es el mismo orden que aplica la consulta SQL.
+        """
+        return (-self.fecha_publicacion.toordinal(), self.seccion.orden, self.identificador)
 
     @property
     def texto_descargado(self) -> bool:

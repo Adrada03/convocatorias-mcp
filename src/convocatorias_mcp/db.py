@@ -213,8 +213,12 @@ class EstadoIndice:
     dias_ok: int = 0
     dias_sin_publicacion: int = 0
     dias_con_error: int = 0
+    #: Hasta cuándo se ha *comprobado* la fuente, de ``source_health``.
     primera_fecha: date | None = None
     ultima_fecha: date | None = None
+    #: Fecha de publicación más reciente de la que hay *datos*. No es lo mismo:
+    #: el último día comprobado pudo ser un domingo sin publicación.
+    ultima_publicacion: date | None = None
     huecos: list[date] = field(default_factory=list)
 
     @property
@@ -270,12 +274,17 @@ def estado_del_indice(conn: sqlite3.Connection, *, fuente: str | None = None) ->
         params,
     ).fetchone()
 
-    convocatorias = conn.execute(
-        f"SELECT COUNT(*) AS total FROM convocatorias {filtro}", params
-    ).fetchone()["total"]
+    resumen_datos = conn.execute(
+        f"SELECT COUNT(*) AS total, MAX(fecha_publicacion) AS ultima FROM convocatorias {filtro}",
+        params,
+    ).fetchone()
+    convocatorias = resumen_datos["total"]
+    ultima_publicacion = (
+        date.fromisoformat(resumen_datos["ultima"]) if resumen_datos["ultima"] else None
+    )
 
     if not fila or not fila["dias"]:
-        return EstadoIndice(convocatorias=convocatorias)
+        return EstadoIndice(convocatorias=convocatorias, ultima_publicacion=ultima_publicacion)
 
     primera = date.fromisoformat(fila["primera"])
     ultima = date.fromisoformat(fila["ultima"])
@@ -298,5 +307,6 @@ def estado_del_indice(conn: sqlite3.Connection, *, fuente: str | None = None) ->
         dias_con_error=fila["con_error"] or 0,
         primera_fecha=primera,
         ultima_fecha=ultima,
+        ultima_publicacion=ultima_publicacion,
         huecos=huecos,
     )
