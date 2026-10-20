@@ -33,7 +33,7 @@ El trabajo se reparte entre lo que un programa hace bien y lo que un modelo
 hace bien:
 
 **Nivel 1, en código.** Un filtro barato y determinista sobre el índice local:
-palabras clave, sección del boletín y ámbito territorial. Rápido, repetible y
+palabras clave y sección del boletín. Rápido, repetible y
 sin llamadas a ningún modelo. Devuelve candidatas.
 
 **Nivel 2, en el modelo.** `get_convocatoria(id)` descarga el texto íntegro y se
@@ -162,7 +162,7 @@ console-script. Está pendiente de implementar.
 
 | Tool | Qué hace |
 |---|---|
-| `search_convocatorias` | Filtro de nivel 1 sobre el índice: palabras clave, sección, fechas, ámbito y watchlist. Devuelve metadatos y enlaces, no textos. |
+| `search_convocatorias` | Filtro de nivel 1 sobre el índice: palabras clave, sección, fechas y watchlist. Devuelve metadatos y enlaces, no textos. |
 | `get_convocatoria` | Una convocatoria con su texto oficial completo, para que el modelo lea los requisitos (nivel 2). La primera vez lo descarga del boletín y lo cachea; solo bajo demanda, nunca las 15.000 por adelantado. |
 | `explain_match` | Por qué una convocatoria encaja (o no) con cada watchlist, con el desglose del score por dimensiones. |
 | `deadlines_soon` | Lo que vence en los próximos N días, de las convocatorias con plazo determinado. |
@@ -189,7 +189,7 @@ sale de cuatro dimensiones, con estos pesos por defecto:
 | Título | 0,55 | Palabras clave de la watchlist en el título. La señal más directa. |
 | Sección | 0,25 | Que la sección sea una de las que vigila, o al menos una de las que traen convocatorias. |
 | Departamento | 0,15 | Palabras clave en el departamento o el epígrafe. Suma cuando acierta, no resta cuando no. |
-| Ámbito | 0,05 | Solo cuando el boletín lo publica, que es casi nunca. |
+| ~~Ámbito~~ | — | **Inactiva.** El BOE no publica el campo: está vacío en las 14.935. No resta (solo puntúa cuando ambos lados lo traen), pero nunca suma. |
 
 Tres decisiones que importan:
 
@@ -473,17 +473,26 @@ cp watchlists.example.yaml watchlists.yaml
 
 ```yaml
 watchlists:
-  - nombre: becas-informatica
-    keywords: [informática, software, telecomunicaciones]
-    secciones: [III, V.B]
-    min_score: 0.5
-  - nombre: empleo-publico-tic
-    keywords: [analista, programador, sistemas]
+  - nombre: empleo-publico
+    keywords: [proceso selectivo, pruebas selectivas]
     secciones: [II.B]
-    ambito: [Madrid, Estatal]
+  - nombre: becas
+    keywords: [beca, becas, matrícula]
+    secciones: [III, V.B]
 notificacion:
   avisar_plazo_dias: 3
 ```
+
+Las keywords van en el vocabulario del boletín, no en el tuyo: sobre un índice
+real de 14.935 convocatorias, `analista` y `programador` aparecen **0 veces**,
+y `proceso selectivo` 262. Y no hay `min_score` en el ejemplo a propósito: su
+defecto es 0, y subirlo es lo que más resultados hace desaparecer sin avisar
+(ver abajo).
+
+`convocatorias-mcp doctor` cuenta cuántas casa cada watchlist contra tu índice
+y avisa si alguna casa casi nada, distinguiendo si la culpa es de las keywords
+o del `min_score`. Una watchlist mal configurada no da ningún error: callada,
+se confunde con "no hay nada que te encaje".
 
 Hay varias watchlists, y no un perfil único, porque los criterios de una beca de
 informática no se parecen a los de una vivienda protegida: mezclarlos daría un

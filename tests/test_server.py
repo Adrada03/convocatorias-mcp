@@ -147,9 +147,22 @@ async def test_search_declara_sus_parametros(servidor):
     tools = await servidor.list_tools()
     tool = next(t for t in tools if t.name == "search_convocatorias")
     propiedades = set((tool.input_schema.get("properties") or {}).keys())
-    assert {"keywords", "seccion", "desde", "hasta", "ambito", "limite"} <= propiedades
+    assert {"keywords", "seccion", "desde", "hasta", "limite"} <= propiedades
     # Ninguno es obligatorio: "que ha salido hoy" es una pregunta valida.
     assert not tool.input_schema.get("required")
+
+
+async def test_search_no_expone_ambito(servidor):
+    """El BOE no publica el ambito: filtrar por el devolveria cero siempre.
+
+    Un parametro que no puede funcionar es peor que uno que no existe, porque
+    el modelo lo intentaria. Mismo criterio que con run_digest.
+    """
+    tools = await servidor.list_tools()
+    tool = next(t for t in tools if t.name == "search_convocatorias")
+    propiedades = set((tool.input_schema.get("properties") or {}).keys())
+    assert "ambito" not in propiedades
+    assert "ambito" not in (tool.description or "")
 
 
 # --------------------------------------------------------------------------- #

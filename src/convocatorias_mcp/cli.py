@@ -31,6 +31,7 @@ from convocatorias_mcp import __version__
 from convocatorias_mcp.config import ConfigError, Settings, hoy_boletin, load_watchlists
 from convocatorias_mcp.db import IndexSchemaError, estado_del_indice, open_index
 from convocatorias_mcp.export import CITA_BOE, VENTANA_POR_DEFECTO, exportar
+from convocatorias_mcp.index import contar_por_watchlist
 from convocatorias_mcp.ingest import Progreso, ResumenIngesta, ingerir
 from convocatorias_mcp.models import Watchlist
 from convocatorias_mcp.sources import FUENTE_POR_DEFECTO, crear_fuente, nombres_de_fuentes
@@ -109,6 +110,75 @@ def check_watchlists(settings: Settings) -> Check:
         for watchlist in config.watchlists
     )
     return Check("watchlists.yaml", "ok", f"{len(config.watchlists)}: {resumen}")
+
+
+#: Por debajo de esto, una watchlist casi seguro está mal configurada y no es
+#: que no haya convocatorias. Es un umbral de sospecha, no una regla: una
+#: watchlist deliberadamente estrecha puede casar 3 y estar bien. Por eso el
+#: aviso sugiere revisar, y nunca afirma que esté rota.
+UMBRAL_WATCHLIST_SOSPECHOSA = 5
+
+
+def check_watchlists_casan(settings: Settings) -> list[Check]:
+    """Comprueba que cada watchlist casa con algo del índice.
+
+    Una watchlist mal configurada no da ningún error: simplemente no devuelve
+    nada, y desde fuera se confunde con "no ha salido nada que te encaje". Esa
+    confusión es justo lo que hay que evitar, así que se cuenta de verdad.
+
+    Cuando una casa poco, se vuelve a contar con ``min_score`` a cero. Si así
+    aparecen muchas más, el problema es el umbral y no las keywords, y se dice
+    cuál de los dos es: es la diferencia entre "no hay nada" y "lo estás
+    cortando tú".
+    """
+    try:
+        config = load_watchlists(settings.watchlists_path)
+    except ConfigError:
+        return []  # check_watchlists ya lo ha reportado.
+    if config is None or config.is_empty:
+        return []
+
+    try:
+        conn = open_index(settings.index_path)
+    except (IndexSchemaError, OSError):
+        return []  # check_indice ya lo ha reportado.
+
+    try:
+        if estado_del_indice(conn).convocatorias == 0:
+            # Sin nada indexado no se puede distinguir una watchlist rota de
+            # una que aún no tiene nada que casar. Decirlo sería adivinar.
+            # Se mira el recuento y no `esta_vacio`, que cuenta días ingeridos:
+            # un índice con convocatorias y sin registro de ingesta sí se puede
+            # diagnosticar, y saltárselo era volver al fallo silencioso.
+            return []
+        sinonimos = cargar_sinonimos(settings.sinonimos_path)
+        checks: list[Check] = []
+        for watchlist in config.watchlists:
+            casan = contar_por_watchlist(conn, watchlist, sinonimos=sinonimos)
+            if casan > UMBRAL_WATCHLIST_SOSPECHOSA:
+                checks.append(
+                    Check(f"watchlist '{watchlist.nombre}'", "ok", f"casa {casan} convocatorias")
+                )
+                continue
+
+            detalle = f"casa {casan} convocatorias del índice"
+            if watchlist.min_score > 0:
+                sin_umbral = contar_por_watchlist(
+                    conn, watchlist, sinonimos=sinonimos, min_score=0.0
+                )
+                if sin_umbral > casan:
+                    detalle += (
+                        f"; con min_score 0 casaría {sin_umbral}, así que es el umbral "
+                        f"({watchlist.min_score}) el que las está cortando, no las keywords"
+                    )
+                else:
+                    detalle += "; revisa las keywords: no están en el vocabulario del boletín"
+            else:
+                detalle += "; revisa las keywords: no están en el vocabulario del boletín"
+            checks.append(Check(f"watchlist '{watchlist.nombre}'", "warn", detalle))
+        return checks
+    finally:
+        conn.close()
 
 
 def _plural(cantidad: int, singular: str, plural: str) -> str:
@@ -218,6 +288,7 @@ def run_doctor(*, check_api: bool = False, cwd: Path | None = None) -> int:
 
     checks.append(check_watchlists(settings))
     checks.extend(check_index(settings))
+    checks.extend(check_watchlists_casan(settings))
 
     if check_api:
         checks.extend(check_boe())

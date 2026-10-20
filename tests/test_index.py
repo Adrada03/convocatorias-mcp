@@ -18,6 +18,7 @@ import pytest
 from convocatorias_mcp.db import open_index
 from convocatorias_mcp.index import (
     buscar,
+    contar_por_watchlist,
     fechas_registradas,
     guardar_convocatorias,
     obtener_convocatoria,
@@ -404,3 +405,78 @@ def test_las_fechas_son_por_fuente(conn):
         conn, SourceHealth(fuente="boe", fecha=date(2026, 10, 17), estado=EstadoIngesta.OK)
     )
     assert fechas_registradas(conn, "bocm") == set()
+
+
+# --------------------------------------------------------------------------- #
+# contar_por_watchlist
+# --------------------------------------------------------------------------- #
+
+
+def test_contar_no_tiene_el_tope_de_buscar(conn, convocatoria_factory):
+    """Cuenta el indice entero: con tope, "200" no distingue 200 de 2.000.
+
+    `buscar` limita a 200 por SearchFilters, y este contador existe para
+    diagnosticar una watchlist, donde un numero recortado enganaria.
+    """
+    guardar_convocatorias(
+        conn,
+        [
+            convocatoria_factory(
+                identificador=f"BOE-A-2026-{n:05d}",
+                titulo=f"Resolucion por la que se convoca proceso selectivo numero {n}",
+            )
+            for n in range(1, 251)
+        ],
+    )
+    watchlist = Watchlist(nombre="w", keywords=["proceso selectivo"], secciones=[Seccion.II_B])
+
+    assert contar_por_watchlist(conn, watchlist) == 250
+
+
+def test_contar_respeta_el_min_score_de_la_watchlist(conn, convocatoria_factory):
+    guardar_convocatorias(
+        conn,
+        [
+            convocatoria_factory(
+                identificador="BOE-A-2026-00001",
+                titulo="Resolucion por la que se convoca proceso selectivo de informatica",
+            )
+        ],
+    )
+    # Con dos keywords y solo una en el titulo, el score es 0.6562: un
+    # min_score de 0.7 la deja fuera y el de por defecto la deja entrar.
+    base = {"keywords": ["proceso selectivo", "inexistente"], "secciones": [Seccion.II_B]}
+
+    assert contar_por_watchlist(conn, Watchlist(nombre="w", **base)) == 1
+    assert contar_por_watchlist(conn, Watchlist(nombre="w", min_score=0.7, **base)) == 0
+
+
+def test_min_score_explicito_sustituye_al_de_la_watchlist(conn, convocatoria_factory):
+    """Es como `doctor` averigua si el umbral es lo que corta los resultados."""
+    guardar_convocatorias(
+        conn,
+        [
+            convocatoria_factory(
+                identificador="BOE-A-2026-00001",
+                titulo="Resolucion por la que se convoca proceso selectivo",
+            )
+        ],
+    )
+    estrangulada = Watchlist(
+        nombre="w",
+        keywords=["proceso selectivo", "inexistente"],
+        secciones=[Seccion.II_B],
+        min_score=0.7,
+    )
+
+    assert contar_por_watchlist(conn, estrangulada) == 0
+    assert contar_por_watchlist(conn, estrangulada, min_score=0.0) == 1
+
+
+def test_contar_no_muta_la_watchlist_que_recibe(conn, convocatoria_factory):
+    guardar_convocatorias(conn, [convocatoria_factory()])
+    watchlist = Watchlist(nombre="w", keywords=["convoca", "inexistente"], min_score=0.9)
+
+    contar_por_watchlist(conn, watchlist, min_score=0.0)
+
+    assert watchlist.min_score == 0.9

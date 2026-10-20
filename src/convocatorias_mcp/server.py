@@ -338,7 +338,6 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
         seccion: str | None = None,
         desde: date | None = None,
         hasta: date | None = None,
-        ambito: str | None = None,
         watchlist: str | None = None,
         include_vistas: bool = False,
         limite: int = 25,
@@ -401,10 +400,6 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
                 útil; úsalo siempre que la intención del usuario esté clara.
             desde: Fecha de publicación mínima, en formato AAAA-MM-DD.
             hasta: Fecha de publicación máxima, en formato AAAA-MM-DD.
-            ambito: Ámbito territorial, por ejemplo "Estatal" o "Madrid". Solo
-                filtra cuando el boletín lo publica, así que descarta las
-                convocatorias cuyo ámbito no se ha podido determinar. Si buscas
-                por zona, suele ser mejor no usarlo y mirar los resultados.
             watchlist: Nombre de una watchlist del usuario para quedarte solo
                 con lo que ella hace coincidir. Si el usuario dice "lo de
                 siempre" o "mis becas", mira primero qué watchlists tiene en la
@@ -418,7 +413,9 @@ def construir_servidor(settings: Settings | None = None) -> MCPServer:
             seccion=Seccion.from_text(seccion) if seccion else None,
             desde=desde,
             hasta=hasta,
-            ambito=ambito,
+            # Sin 'ambito': SearchFilters sigue soportándolo para cuando una
+            # fuente lo publique, pero el BOE no lo hace, así que el tool no
+            # lo expone. Ver el comentario de SearchFilters.ambito.
             include_vistas=include_vistas,
             limite=limite,
         )

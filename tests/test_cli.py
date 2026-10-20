@@ -8,6 +8,7 @@ pegarse en un issue.
 
 from __future__ import annotations
 
+import textwrap
 from datetime import date
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from convocatorias_mcp.cli import (
     check_index,
     check_python,
     check_watchlists,
+    check_watchlists_casan,
     main,
     run_doctor,
     run_export,
@@ -28,6 +30,7 @@ from convocatorias_mcp.cli import (
 )
 from convocatorias_mcp.config import Settings
 from convocatorias_mcp.db import open_index
+from convocatorias_mcp.index import guardar_convocatorias
 
 SUMARIO_URL = "https://www.boe.es/datosabiertos/api/boe/sumario/20261019"
 
@@ -351,3 +354,130 @@ def test_el_parser_acepta_export_con_sus_opciones():
     assert args.command == "export"
     assert args.todo is True
     assert args.salida == Path("x.json")
+
+
+# --------------------------------------------------------------------------- #
+# Aviso de watchlist que no casa nada
+# --------------------------------------------------------------------------- #
+#
+# Una watchlist mal configurada no da ningun error: no devuelve nada, y eso se
+# confunde con "no hay convocatorias que te encajen". Estos tests cubren que el
+# aviso aparece y que atribuye bien la causa.
+
+
+def _indice_con(tmp_path: Path, convocatorias) -> Path:
+    ruta = tmp_path / "indice.sqlite3"
+    conexion = open_index(ruta)
+    guardar_convocatorias(conexion, convocatorias)
+    conexion.close()
+    return ruta
+
+
+def _watchlists(tmp_path: Path, contenido: str) -> Path:
+    ruta = tmp_path / "watchlists.yaml"
+    ruta.write_text(textwrap.dedent(contenido), encoding="utf-8")
+    return ruta
+
+
+def test_una_watchlist_que_casa_de_sobra_no_avisa(tmp_path: Path, convocatoria_factory):
+    indice = _indice_con(
+        tmp_path,
+        [
+            convocatoria_factory(
+                identificador=f"BOE-A-2026-{n:05d}",
+                titulo=f"Resolucion por la que se convoca proceso selectivo {n}",
+            )
+            for n in range(1, 11)
+        ],
+    )
+    lista = _watchlists(
+        tmp_path,
+        """
+        watchlists:
+          - nombre: empleo
+            keywords: [proceso selectivo]
+            secciones: [II.B]
+        """,
+    )
+
+    checks = check_watchlists_casan(
+        settings_para_test(tmp_path, watchlists_path=lista, index_path=indice)
+    )
+
+    assert [c.status for c in checks] == ["ok"]
+    assert "casa 10 convocatorias" in checks[0].detail
+
+
+def test_una_watchlist_con_keywords_que_no_existen_avisa(tmp_path: Path, convocatoria_factory):
+    indice = _indice_con(tmp_path, [convocatoria_factory()])
+    lista = _watchlists(
+        tmp_path,
+        """
+        watchlists:
+          - nombre: rota
+            keywords: [analista, programador]
+        """,
+    )
+
+    checks = check_watchlists_casan(
+        settings_para_test(tmp_path, watchlists_path=lista, index_path=indice)
+    )
+
+    assert [c.status for c in checks] == ["warn"]
+    assert "revisa las keywords" in checks[0].detail
+
+
+def test_el_aviso_senala_al_min_score_cuando_es_el_umbral_lo_que_corta(
+    tmp_path: Path, convocatoria_factory
+):
+    """Distinguir ambas causas es el objetivo: el arreglo no es el mismo."""
+    indice = _indice_con(
+        tmp_path,
+        [
+            convocatoria_factory(
+                identificador="BOE-A-2026-00001",
+                titulo="Resolucion por la que se convoca proceso selectivo",
+            )
+        ],
+    )
+    # Una sola keyword del par casa, asi que el score es 0.6562 y un
+    # min_score de 0.9 la deja fuera aun siendo las keywords correctas.
+    lista = _watchlists(
+        tmp_path,
+        """
+        watchlists:
+          - nombre: estrangulada
+            keywords: [proceso selectivo, inexistente]
+            min_score: 0.9
+        """,
+    )
+
+    checks = check_watchlists_casan(
+        settings_para_test(tmp_path, watchlists_path=lista, index_path=indice)
+    )
+
+    assert [c.status for c in checks] == ["warn"]
+    assert "es el umbral" in checks[0].detail
+    assert "0.9" in checks[0].detail
+    assert "revisa las keywords" not in checks[0].detail
+
+
+def test_sin_indice_no_se_opina_de_las_watchlists(tmp_path: Path):
+    """Sin nada ingerido no se puede distinguir una watchlist rota de un indice vacio."""
+    indice = tmp_path / "indice.sqlite3"
+    open_index(indice).close()
+    lista = _watchlists(
+        tmp_path,
+        """
+        watchlists:
+          - nombre: w
+            keywords: [lo que sea]
+        """,
+    )
+
+    assert (
+        check_watchlists_casan(
+            settings_para_test(tmp_path, watchlists_path=lista, index_path=indice)
+        )
+        == []
+    )

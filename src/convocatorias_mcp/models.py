@@ -667,6 +667,12 @@ class SearchFilters(BaseModel):
 
     keywords: str | None = Field(default=None, description="Texto libre a buscar.")
     watchlist: str | None = Field(default=None, description="Restringe a una watchlist.")
+    #: Ámbito territorial. **El BOE no publica este campo**: está vacío en las
+    #: ~15.000 convocatorias del índice, así que filtrar por él aquí no
+    #: devuelve nada. Se mantiene porque el filtro es correcto y servirá en
+    #: cuanto una fuente lo publique (los boletines autonómicos, previsible-
+    #: mente), pero por eso `search_convocatorias` no lo expone como parámetro:
+    #: un filtro que siempre devuelve cero solo hace perder llamadas al modelo.
     ambito: str | None = None
     seccion: Seccion | None = None
     desde: date | None = Field(

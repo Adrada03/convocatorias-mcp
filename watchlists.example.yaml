@@ -10,31 +10,70 @@
 # Todo es opcional. Sin watchlists el servidor funciona igual: no puntúa y
 # ordena por fecha de publicación.
 #
-# Comprueba que el fichero es válido con:
+# Comprueba el fichero con:
 #
 #   convocatorias-mcp doctor
+#
+# `doctor` no solo valida la sintaxis: cuenta cuántas convocatorias casa cada
+# watchlist contra tu índice y avisa si alguna casa casi nada. Una watchlist
+# mal configurada no da error, simplemente no devuelve nada, y eso se confunde
+# con "no ha salido nada que me encaje". Ejecútalo después de cada cambio.
+#
+# ---------------------------------------------------------------------------
+# Escribe en el idioma del BOE, no en el tuyo
+# ---------------------------------------------------------------------------
+# Los títulos del boletín son lenguaje administrativo. Las palabras naturales
+# suelen valer cero: medido sobre un índice real de 14.935 convocatorias,
+# "analista" y "programador" aparecen 0 veces, y "ayudas al estudio" también.
+# Lo que sí aparece es "proceso selectivo" (262) o "pruebas selectivas" (53).
+# Si una keyword no te da resultados, casi nunca es que no haya convocatorias:
+# es que el BOE las llama de otra manera.
 
 watchlists:
-  - nombre: becas-informatica
+  - nombre: empleo-publico
     # Se buscan en el título, el departamento y el epígrafe. Sin distinguir
     # mayúsculas ni acentos: "informática" e "informatica" valen igual.
-    keywords: [informática, software, telecomunicaciones, ingeniería]
+    # Son un OR: basta con que aparezca una.
+    keywords: [proceso selectivo, pruebas selectivas]
     # Secciones del boletín a vigilar. Vacío o ausente = todas.
     #   II.B  oposiciones y concursos (empleo público)
     #   III   otras disposiciones (bases reguladoras de becas y subvenciones)
     #   V.A   anuncios de licitaciones públicas
     #   V.B   otros anuncios oficiales (extractos de convocatorias)
     # Se aceptan tanto "III" como el código interno del BOE, "3".
-    secciones: [III, V.B]
-    # Score mínimo, de 0 a 1, para que una convocatoria entre en esta
-    # watchlist. Súbelo si recibes demasiado ruido.
-    min_score: 0.5
-
-  - nombre: empleo-publico-tic
-    keywords: [analista, programador, sistemas]
     secciones: [II.B]
-    # Ámbitos territoriales aceptables. Vacío o ausente = todos.
-    ambito: [Madrid, Estatal]
+
+  - nombre: becas
+    keywords: [beca, becas, matrícula]
+    secciones: [III, V.B]
+
+# ---------------------------------------------------------------------------
+# min_score: el parámetro que más resultados hace desaparecer
+# ---------------------------------------------------------------------------
+# Score mínimo, de 0 a 1, para que una convocatoria entre en la watchlist.
+# Va comentado a propósito: el valor por defecto es 0, que no corta nada.
+#
+# Súbelo solo con un número delante. Con una lista de keywords en OR, una sola
+# coincidencia en el título da del orden de 0.4, así que poner 0.5 exige **dos
+# keywords en el mismo título**, que casi nunca ocurre. En una prueba real eso
+# redujo una watchlist de 70 convocatorias a 5, sin ningún aviso.
+#
+# Si lo subes, vuelve a pasar `doctor` y mira cuántas casa después.
+#
+#   min_score: 0.4
+
+# ---------------------------------------------------------------------------
+# Sobre 'ambito': hoy no sirve de nada
+# ---------------------------------------------------------------------------
+# Hubo un campo 'ambito' para filtrar por territorio. **El BOE no lo publica:**
+# viene vacío en las ~15.000 convocatorias del índice. Una watchlist con
+# 'ambito' no gana nada por tenerlo, y `search_convocatorias` ni siquiera
+# expone el parámetro, porque un filtro que siempre devuelve cero solo sirve
+# para hacer perder tiempo.
+#
+# Para acotar por territorio hoy, lo único que funciona es nombrar a las
+# instituciones en las keywords ("comunidad de madrid", "universidad
+# complutense"...), sabiendo que eso deja fuera lo estatal, que es la mayoría.
 
 notificacion:
   # Con cuántos días de antelación avisar de un plazo que se cierra.

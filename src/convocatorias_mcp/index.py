@@ -33,6 +33,7 @@ from convocatorias_mcp.models import (
     Watchlist,
     normalize_text,
 )
+from convocatorias_mcp.ranking import puntuar
 from convocatorias_mcp.vocabulario import expandir_keywords
 
 __all__ = [
@@ -456,6 +457,42 @@ def buscar(
         params,
     ).fetchall()
     return [_a_convocatoria(fila) for fila in filas]
+
+
+def contar_por_watchlist(
+    conn: sqlite3.Connection,
+    watchlist: Watchlist,
+    *,
+    sinonimos: Mapping[str, tuple[str, ...]] | None = None,
+    min_score: float | None = None,
+) -> int:
+    """Cuenta cuántas convocatorias del índice casan con una watchlist.
+
+    Recorre el índice entero, sin el tope de ``buscar``, porque sirve para
+    diagnosticar una watchlist y un tope daría un número engañoso: "200" no
+    distingue entre 200 y 2.000.
+
+    Puntúa con ``ranking.puntuar``, no con un SQL aparte, para que el número
+    sea el mismo que el usuario verá al buscar.
+
+    ``min_score`` sustituye al de la watchlist cuando se pasa, que es como se
+    averigua si es el umbral lo que está cortando los resultados.
+    """
+    if min_score is not None and min_score != watchlist.min_score:
+        watchlist = watchlist.model_copy(update={"min_score": min_score})
+
+    filas = conn.execute(
+        f"""
+        SELECT {_CAMPOS}
+        FROM convocatorias c
+        LEFT JOIN seguimiento s ON s.convocatoria_id = c.id
+        """
+    )
+    return sum(
+        1
+        for fila in filas
+        if puntuar(_a_convocatoria(fila), watchlist, sinonimos=sinonimos) is not None
+    )
 
 
 # --------------------------------------------------------------------------- #
