@@ -4,7 +4,7 @@
   "display_name": "Convocatorias (BOE)",
   "version": "0.1.0",
   "description": "Vigila el BOE y encuentra becas, ayudas, empleo público y subvenciones que encajan con tu perfil.",
-  "long_description": "REQUIERE PYTHON 3.11 O SUPERIOR en el PATH: el intérprete no viaja dentro de la extensión, solo las dependencias. Compruébalo con 'python --version' en una terminal. Servidor MCP local que indexa el Boletín Oficial del Estado y expone búsqueda, ranking por watchlists, plazos y seguimiento de solicitudes. Lee siempre el texto oficial enlazado: esta herramienta no determina si cumples los requisitos de una convocatoria.",
+  "long_description": "Servidor MCP local que indexa el Boletín Oficial del Estado y expone búsqueda, ranking por watchlists, plazos y seguimiento de solicitudes. No necesitas tener Python instalado: la extensión trae su propio intérprete y no toca el del sistema. Lee siempre el texto oficial enlazado: esta herramienta no determina si cumples los requisitos de una convocatoria.",
   "author": {
     "name": "Álvaro Adrada",
     "url": "https://github.com/Adrada03"
@@ -19,13 +19,12 @@
   "license": "MIT",
   "keywords": ["boe", "convocatorias", "becas", "empleo-publico", "subvenciones", "boletin-oficial"],
   "server": {
-    "type": "python",
-    "entry_point": "server/lib/convocatorias_mcp/cli.py",
+    "type": "binary",
+    "entry_point": "server/python/python.exe",
     "mcp_config": {
-      "command": "python",
+      "command": "${__dirname}/server/python/python.exe",
       "args": ["-m", "convocatorias_mcp.cli"],
       "env": {
-        "PYTHONPATH": "${__dirname}/server/lib;${__dirname}/server/lib/win32;${__dirname}/server/lib/win32/lib;${__dirname}/server/lib/pythonwin",
         "CONVOCATORIAS_WATCHLISTS_PATH": "${user_config.watchlists}"
       }
     }

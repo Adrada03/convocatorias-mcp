@@ -151,50 +151,76 @@ El efecto combinado es que la extensión instalada no ejecutaba ni siquiera su
 propia copia de `site-packages`, sino la del directorio de build. Se detectó
 mirando el árbol de procesos, no los logs, porque nada fallaba.
 
-El empaquetado actual evita las dos trampas:
+El empaquetado actual no depende de nada de la máquina: **el intérprete va
+dentro**.
 
 ```bash
-pip install --target mcpb/server/lib .   # arbol plano y movible, sin -e
+pip install --target mcpb/server/lib .              # dependencias, arbol plano
+curl -O https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip
+unzip python-3.12.10-embed-amd64.zip -d mcpb/server/python
 npm install -g @anthropic-ai/mcpb
 mcpb pack mcpb dist/convocatorias-mcp.mcpb
 ```
 
 `pip install --target` produce un árbol de paquetes sin rutas absolutas, y el
-manifest invoca el módulo (`python -m convocatorias_mcp.cli` con `PYTHONPATH`)
-en vez de un console-script, que es lo que embebía el shebang. El bundle se
-prueba desempaquetándolo en otra carpeta y arrancándolo allí: si solo se
-prueba donde se construyó, el fallo no aparece.
+manifest lanza el Python embebido del propio bundle
+(`${__dirname}/server/python/python.exe -m convocatorias_mcp.cli`) en vez de
+un console-script, que es lo que embebía el shebang.
 
-**El runtime no va dentro**, así que hace falta Python 3.11 o superior en el
-PATH.
+### Por qué el intérprete tiene que ir dentro
 
-Ese requisito **no se declara en `compatibility.runtimes.python`**, y la razón
-merece contarse. Ese campo no es documentación: Claude Desktop lo usa como
-puerta, y para evaluarla busca Python en las ubicaciones habituales de
-instalación. Con un Python instalado fuera de ellas —por ejemplo directamente
-en la carpeta del usuario— no lo encuentra, **deshabilita el botón de instalar
-y no hay forma de continuar**, aunque `python --version` responda
-perfectamente en una terminal y la extensión fuese a funcionar. Pasó en la
-máquina de desarrollo.
+La versión intermedia usaba el `python` del sistema y el `PYTHONPATH`. Parecía
+razonable —hay Python 3.12 en el PATH, `python --version` lo confirma— y
+fallaba igualmente con un error que no dice lo que pasa:
 
-Así que el requisito vive en `long_description`, que se muestra en el mismo
-diálogo de instalación. No es esconderlo: es ponerlo donde informa a una
-persona en vez de donde bloquea a quien sí lo cumple. La alternativa real es
-empotrar el intérprete, que daría instalación de un clic sin requisitos; son
-~11 MB más y un bundle por plataforma. Hoy `compatibility.platforms` ya dice
-`win32`, porque los wheels compilados (`lxml`, `pydantic_core`,
-`cryptography`) son `cp312-win_amd64` y habría que construir uno por sistema.
+```
+ImportError: cannot import name 'ArgsKwargs' from 'pydantic_core._pydantic_core'
+```
 
-Dos detalles que solo aparecen al ejecutarlo:
+**Claude Desktop construye su propio PATH y antepone la instalación de Python
+que detecta**, que no tiene por qué ser la que gana en el PATH del sistema. El
+log de la extensión lo enseña:
+
+```
+Using MCP server command: ...\Programs\Python\Python314\python.exe
+paths: [ '...\Programs\Python\Python314',   <- antepuesta por la app
+         ...
+         'C:\Users\<usuario>\',             <- el 3.12 del PATH, por detrás
+```
+
+Los wheels compilados del bundle (`lxml`, `pydantic_core`, `cryptography`) son
+`cp312`, así que bajo 3.14 no cargan. No es un problema de configuración del
+usuario: **con dos Pythons instalados, cuál se usa no lo decide el usuario ni
+el manifest.** La única forma de que el ABI case siempre es llevar el
+intérprete dentro.
+
+Eso tiene un precio que conviene saber: el bundle pasa de 20 a **31 MB** y
+queda atado a una plataforma. `compatibility.platforms` dice `win32` porque
+tanto los wheels como el Python embebible son de Windows; dar soporte a
+macOS y Linux es construir un `.mcpb` por sistema, en CI.
+
+El bundle se prueba desempaquetándolo **en otra carpeta** y arrancándolo allí
+con un PATH hostil (Python 3.14 el primero, y también sin ningún Python). Si
+solo se prueba donde se construyó y con el PATH del desarrollador, ninguno de
+estos dos fallos aparece.
+
+Dos detalles más que solo se ven al ejecutarlo:
 
 - **`pip install --target` no procesa los ficheros `.pth`**, y `pywin32` —que
   llega como dependencia de `mcp`— reparte `pywintypes` por `win32/lib`. Sin
-  añadir esas carpetas al `PYTHONPATH`, el servidor muere al importar. Por eso
-  el manifest declara cuatro rutas y no una.
+  esas carpetas en el `sys.path`, el servidor muere al importar. Van en el
+  `python312._pth` del intérprete embebido, que además ignora el `PYTHONPATH`
+  del entorno: otra cosa menos de la que depender.
 - **Las watchlists no viajan en el bundle**, ni deben: son datos personales.
   El manifest las pide como `user_config` de tipo `file` y las pasa en
   `CONVOCATORIAS_WATCHLISTS_PATH`, así que Claude Desktop genera la casilla al
   instalar. Sin ella el servidor funciona, pero ordena por fecha sin puntuar.
+
+`compatibility.runtimes.python` **no se declara**, y ya no hace falta: no hay
+requisito externo que declarar. Cuando lo había, ese campo resultó ser una
+puerta y no documentación —Claude Desktop deshabilitaba el botón de instalar
+si no encontraba Python donde lo busca, aunque estuviese instalado y
+funcionando—, lo que dejaba fuera precisamente a quien cumplía el requisito.
 
 ### Tools que expone
 
