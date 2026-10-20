@@ -8,12 +8,16 @@ pierde convocatorias que le aplicaban.
 Se usa **conversando con Claude** (Desktop o Code) en lenguaje natural, y trae
 un dashboard estático para consultar sin instalar nada.
 
+![Claude respondiendo a una búsqueda de convocatorias del BOE en lenguaje natural, con sección, plazo y enlace al texto oficial de cada una](docs/demo.gif)
+
+*Una pregunta en lenguaje natural, respondida contra el índice local de unas
+15.000 convocatorias del BOE.*
+
 > **Estado: en construcción.** Funciona end-to-end contra el BOE real: el
 > índice local tiene unas 15.000 convocatorias de los últimos 90 días, con
 > servidor MCP de ocho tools, ingesta incremental, ranking por watchlists y
-> dashboard. Pendiente: activar el despliegue del dashboard.
-
-<!-- TODO: GIF de Claude usando el servidor en vivo -->
+> dashboard publicado en **[convocatorias.alvaroadrada.dev](https://convocatorias.alvaroadrada.dev)**.
+> Pendiente: publicar la extensión `.mcpb` en una release.
 
 ## Lo que esta herramienta no hace
 
