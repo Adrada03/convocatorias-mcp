@@ -80,19 +80,26 @@ claude mcp list
 
 Las versiones recientes de Claude Desktop ya no leen
 `claude_desktop_config.json` a mano: instalan servidores MCP locales como
-**extensiones de escritorio** (`.mcpb`), de un solo clic. Descarga el `.mcpb`
-de la [última release](https://github.com/Adrada03/convocatorias-mcp/releases/latest)
-y, en Claude Desktop, cualquiera de estas tres opciones:
+**extensiones de escritorio** (`.mcpb`), de un solo clic.
+
+> **El `.mcpb` todavía no está publicado.** El primer intento dependía del
+> Python de la máquina donde se construyó, así que arrancaba ahí y en ningún
+> otro sitio; se retiró en vez de dejarlo descargable. La causa está
+> explicada en [Construir el `.mcpb`](#construir-el-mcpb-por-qué-un-venv-no-vale):
+> un venv no es relocalizable, de modo que el runtime tiene que ir empotrado
+> en el propio bundle. Mientras tanto, la vía que sí funciona es
+> **Claude Code**, arriba.
+
+Cuando esté publicado, se descargará de la última release y se instalará con
+cualquiera de estas tres opciones:
 
 - Haz doble clic en el archivo `.mcpb`.
 - Arrástralo a la ventana de Claude Desktop.
 - **Settings → Extensions → Advanced settings → Install Extension…** y
   selecciónalo.
 
-Revisa los permisos que te muestra antes de instalar: es un `.mcpb` sin firmar
-(no hay certificado de desarrollador detrás), así que solo instálalo si
-confías en la fuente — lo cual, siendo tu propio build o el de este repo, es
-razonable, pero la app te lo advierte igual.
+Irá sin firmar (no hay certificado de desarrollador detrás), así que Claude
+Desktop avisará de ello al instalarlo.
 
 > Si usas una versión de Claude Desktop **anterior** a las extensiones `.mcpb`
 > (antes de 2025), todavía puede valer la configuración manual en
@@ -119,24 +126,37 @@ Es un **servidor stdio local**: no hay servicio alojado, ni backend, ni claves.
 Lo arranca tu Claude en tu máquina y lee un índice SQLite de tu disco. Cualquiera
 puede usarlo con su propia cuenta.
 
-### Construir el `.mcpb` tú mismo
+### Construir el `.mcpb`: por qué un venv no vale
 
-El `.mcpb` de las releases no se genera a mano ni se versiona en el repo (son
-~20 MB de un entorno virtual empaquetado). Si prefieres construirlo tú:
+El `.mcpb` no se versiona en el repo ni se genera a mano, y el primer intento
+—empaquetar un venv y apuntar el manifest a su `convocatorias-mcp.exe`—
+resultó estar roto de una forma que no se ve: **funcionaba en la máquina
+donde se construyó y en ninguna otra.** Merece la pena contarlo porque el
+fallo es silencioso.
 
-```bash
-python -m venv mcpb/server/venv
-mcpb/server/venv/Scripts/pip install .   # instala solo las dependencias de runtime, sin -e
-cd ..
-npm install -g @anthropic-ai/mcpb
-mcpb pack mcpb dist/convocatorias-mcp.mcpb
-```
+Un venv **no es relocalizable**. Dos cosas lo atan a su sitio:
 
-`mcpb/manifest.json` describe las ocho tools y cómo lanzar el servidor
-(`server/venv/Scripts/convocatorias-mcp.exe`, sin argumentos). Por ahora solo
-está probado en Windows (`compatibility.platforms` en el manifest lo refleja);
-construir el equivalente en macOS/Linux debería ser el mismo proceso con
-`.venv/bin/` en vez de `.venv/Scripts/`, pero no se ha verificado.
+1. **El `.exe` del entry point lleva una ruta absoluta.** pip genera los
+   console-scripts con un shebang embebido apuntando al intérprete del venv
+   que los creó:
+   ```
+   #!C:\...\build\mcpb\server\venv\Scripts\python.exe
+   ```
+   Instalado en otra ruta, el `.exe` reenvía igualmente al directorio de
+   build. En la máquina donde se construyó, eso existe y arranca; fuera, no.
+2. **El venv no contiene el runtime.** Ni `Lib/` ni `python3xx.dll` viven
+   dentro: `pyvenv.cfg` apunta a la instalación base de Python de esa
+   máquina, que no viaja en el bundle.
+
+El efecto combinado es que la extensión instalada no ejecutaba ni siquiera su
+propia copia de `site-packages`, sino la del directorio de build. Se detectó
+mirando el árbol de procesos, no los logs, porque nada fallaba.
+
+El empaquetado correcto evita las dos trampas: dependencias con
+`pip install --target` (árbol plano y movible, sin rutas absolutas), runtime
+de Python empotrado dentro del bundle, y el manifest invocando el módulo
+(`python -m convocatorias_mcp.cli` con `PYTHONPATH`) en vez de un
+console-script. Está pendiente de implementar.
 
 ### Tools que expone
 
