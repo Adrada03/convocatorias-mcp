@@ -13,21 +13,33 @@
     "type": "git",
     "url": "https://github.com/Adrada03/convocatorias-mcp"
   },
-  "homepage": "https://github.com/Adrada03/convocatorias-mcp",
+  "homepage": "https://convocatorias.alvaroadrada.dev",
   "documentation": "https://github.com/Adrada03/convocatorias-mcp#readme",
   "support": "https://github.com/Adrada03/convocatorias-mcp/issues",
   "license": "MIT",
   "keywords": ["boe", "convocatorias", "becas", "empleo-publico", "subvenciones", "boletin-oficial"],
   "server": {
-    "type": "binary",
-    "entry_point": "server/venv/Scripts/convocatorias-mcp.exe",
+    "type": "python",
+    "entry_point": "server/lib/convocatorias_mcp/cli.py",
     "mcp_config": {
-      "command": "${__dirname}/server/venv/Scripts/convocatorias-mcp.exe",
-      "args": []
+      "command": "python",
+      "args": ["-m", "convocatorias_mcp.cli"],
+      "env": {
+        "PYTHONPATH": "${__dirname}/server/lib;${__dirname}/server/lib/win32;${__dirname}/server/lib/win32/lib;${__dirname}/server/lib/pythonwin",
+        "CONVOCATORIAS_WATCHLISTS_PATH": "${user_config.watchlists}"
+      }
+    }
+  },
+  "user_config": {
+    "watchlists": {
+      "type": "file",
+      "title": "Fichero de watchlists",
+      "description": "Tu watchlists.yaml. Sin él el servidor funciona igual, pero no puntúa: ordena por fecha de publicación. Déjalo vacío si no usas watchlists.",
+      "required": false
     }
   },
   "tools": [
-    { "name": "search_convocatorias", "description": "Filtro de nivel 1 sobre el índice: palabras clave, sección, fechas, ámbito y watchlist." },
+    { "name": "search_convocatorias", "description": "Filtro de nivel 1 sobre el índice: palabras clave, sección, fechas y watchlist." },
     { "name": "get_convocatoria", "description": "Una convocatoria con su texto oficial completo, para lectura de requisitos (nivel 2)." },
     { "name": "explain_match", "description": "Por qué una convocatoria encaja (o no) con cada watchlist, con el desglose del score." },
     { "name": "deadlines_soon", "description": "Convocatorias con plazo determinado que vencen en los próximos N días." },

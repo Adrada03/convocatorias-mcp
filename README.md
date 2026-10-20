@@ -82,16 +82,15 @@ Las versiones recientes de Claude Desktop ya no leen
 `claude_desktop_config.json` a mano: instalan servidores MCP locales como
 **extensiones de escritorio** (`.mcpb`), de un solo clic.
 
-> **El `.mcpb` todavía no está publicado.** El primer intento dependía del
-> Python de la máquina donde se construyó, así que arrancaba ahí y en ningún
-> otro sitio; se retiró en vez de dejarlo descargable. La causa está
-> explicada en [Construir el `.mcpb`](#construir-el-mcpb-por-qué-un-venv-no-vale):
-> un venv no es relocalizable, de modo que el runtime tiene que ir empotrado
-> en el propio bundle. Mientras tanto, la vía que sí funciona es
-> **Claude Code**, arriba.
+> **El `.mcpb` todavía no está publicado en una release.** El bundle ya se
+> construye y se ha verificado desempaquetándolo fuera de la carpeta donde se
+> genera (el primer intento solo arrancaba en la máquina que lo construyó, y
+> se retiró en vez de dejarlo descargable; la causa está en
+> [Construir el `.mcpb`](#construir-el-mcpb-por-qué-un-venv-no-vale)).
+> Hasta que se publique, se construye con las instrucciones de esa sección, o
+> se usa **Claude Code**, arriba, que no necesita empaquetado.
 
-Cuando esté publicado, se descargará de la última release y se instalará con
-cualquiera de estas tres opciones:
+Una vez tengas el `.mcpb`, se instala con cualquiera de estas tres opciones:
 
 - Haz doble clic en el archivo `.mcpb`.
 - Arrástralo a la ventana de Claude Desktop.
@@ -152,11 +151,38 @@ El efecto combinado es que la extensión instalada no ejecutaba ni siquiera su
 propia copia de `site-packages`, sino la del directorio de build. Se detectó
 mirando el árbol de procesos, no los logs, porque nada fallaba.
 
-El empaquetado correcto evita las dos trampas: dependencias con
-`pip install --target` (árbol plano y movible, sin rutas absolutas), runtime
-de Python empotrado dentro del bundle, y el manifest invocando el módulo
-(`python -m convocatorias_mcp.cli` con `PYTHONPATH`) en vez de un
-console-script. Está pendiente de implementar.
+El empaquetado actual evita las dos trampas:
+
+```bash
+pip install --target mcpb/server/lib .   # arbol plano y movible, sin -e
+npm install -g @anthropic-ai/mcpb
+mcpb pack mcpb dist/convocatorias-mcp.mcpb
+```
+
+`pip install --target` produce un árbol de paquetes sin rutas absolutas, y el
+manifest invoca el módulo (`python -m convocatorias_mcp.cli` con `PYTHONPATH`)
+en vez de un console-script, que es lo que embebía el shebang. El bundle se
+prueba desempaquetándolo en otra carpeta y arrancándolo allí: si solo se
+prueba donde se construyó, el fallo no aparece.
+
+**El runtime no va dentro**, así que hace falta Python 3.11 o superior en el
+PATH. Está declarado en `compatibility.runtimes.python`, que es la diferencia
+entre un requisito y un fallo silencioso. Empotrar un intérprete daría
+instalación de un clic, pero el de Windows son ~11 MB más y ataría el bundle a
+una plataforma; hoy `compatibility.platforms` ya dice `win32`, porque los
+wheels compilados (`lxml`, `pydantic_core`, `cryptography`) son
+`cp312-win_amd64` y habría que construir uno por sistema.
+
+Dos detalles que solo aparecen al ejecutarlo:
+
+- **`pip install --target` no procesa los ficheros `.pth`**, y `pywin32` —que
+  llega como dependencia de `mcp`— reparte `pywintypes` por `win32/lib`. Sin
+  añadir esas carpetas al `PYTHONPATH`, el servidor muere al importar. Por eso
+  el manifest declara cuatro rutas y no una.
+- **Las watchlists no viajan en el bundle**, ni deben: son datos personales.
+  El manifest las pide como `user_config` de tipo `file` y las pasa en
+  `CONVOCATORIAS_WATCHLISTS_PATH`, así que Claude Desktop genera la casilla al
+  instalar. Sin ella el servidor funciona, pero ordena por fecha sin puntuar.
 
 ### Tools que expone
 
