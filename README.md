@@ -389,6 +389,10 @@ Cada boletín es una fuente que implementa la interfaz `BoletinSource`
 servidor MCP no conocen ningún boletín concreto, así que añadir uno es crear un
 fichero, implementar `fetch_dia()` y registrarlo.
 
+El detalle completo —capas, invariantes, ingesta, ranking, plazos y
+empaquetado, con diagramas— está en
+[docs/ARQUITECTURA.md](docs/ARQUITECTURA.md).
+
 ## El pivote: de ofertas de empleo a convocatorias oficiales
 
 Este repo empezó siendo `jobscout-mcp`, un agregador de ofertas de empleo de
