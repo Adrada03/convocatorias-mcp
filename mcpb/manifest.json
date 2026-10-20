@@ -4,7 +4,7 @@
   "display_name": "Convocatorias (BOE)",
   "version": "0.1.0",
   "description": "Vigila el BOE y encuentra becas, ayudas, empleo público y subvenciones que encajan con tu perfil.",
-  "long_description": "Servidor MCP local que indexa el Boletín Oficial del Estado y expone búsqueda, ranking por watchlists, plazos y seguimiento de solicitudes. Lee siempre el texto oficial enlazado: esta herramienta no determina si cumples los requisitos de una convocatoria.",
+  "long_description": "REQUIERE PYTHON 3.11 O SUPERIOR en el PATH: el intérprete no viaja dentro de la extensión, solo las dependencias. Compruébalo con 'python --version' en una terminal. Servidor MCP local que indexa el Boletín Oficial del Estado y expone búsqueda, ranking por watchlists, plazos y seguimiento de solicitudes. Lee siempre el texto oficial enlazado: esta herramienta no determina si cumples los requisitos de una convocatoria.",
   "author": {
     "name": "Álvaro Adrada",
     "url": "https://github.com/Adrada03"
@@ -50,9 +50,6 @@
   ],
   "compatibility": {
     "claude_desktop": ">=0.10.0",
-    "platforms": ["win32"],
-    "runtimes": {
-      "python": ">=3.11,<4.0"
-    }
+    "platforms": ["win32"]
   }
 }

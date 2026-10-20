@@ -166,12 +166,24 @@ prueba desempaquetándolo en otra carpeta y arrancándolo allí: si solo se
 prueba donde se construyó, el fallo no aparece.
 
 **El runtime no va dentro**, así que hace falta Python 3.11 o superior en el
-PATH. Está declarado en `compatibility.runtimes.python`, que es la diferencia
-entre un requisito y un fallo silencioso. Empotrar un intérprete daría
-instalación de un clic, pero el de Windows son ~11 MB más y ataría el bundle a
-una plataforma; hoy `compatibility.platforms` ya dice `win32`, porque los
-wheels compilados (`lxml`, `pydantic_core`, `cryptography`) son
-`cp312-win_amd64` y habría que construir uno por sistema.
+PATH.
+
+Ese requisito **no se declara en `compatibility.runtimes.python`**, y la razón
+merece contarse. Ese campo no es documentación: Claude Desktop lo usa como
+puerta, y para evaluarla busca Python en las ubicaciones habituales de
+instalación. Con un Python instalado fuera de ellas —por ejemplo directamente
+en la carpeta del usuario— no lo encuentra, **deshabilita el botón de instalar
+y no hay forma de continuar**, aunque `python --version` responda
+perfectamente en una terminal y la extensión fuese a funcionar. Pasó en la
+máquina de desarrollo.
+
+Así que el requisito vive en `long_description`, que se muestra en el mismo
+diálogo de instalación. No es esconderlo: es ponerlo donde informa a una
+persona en vez de donde bloquea a quien sí lo cumple. La alternativa real es
+empotrar el intérprete, que daría instalación de un clic sin requisitos; son
+~11 MB más y un bundle por plataforma. Hoy `compatibility.platforms` ya dice
+`win32`, porque los wheels compilados (`lxml`, `pydantic_core`,
+`cryptography`) son `cp312-win_amd64` y habría que construir uno por sistema.
 
 Dos detalles que solo aparecen al ejecutarlo:
 
