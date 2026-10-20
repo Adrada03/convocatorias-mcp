@@ -13,9 +13,10 @@
 # criterios de nadie. Las watchlists de verdad viven en watchlists.yaml, que no
 # se versiona.
 #
-# PENDIENTE DE ACTIVAR: hay que poner "Source: GitHub Actions" en Settings >
-# Pages. Hasta entonces el despliegue falla, que es el comportamiento correcto
-# para algo que todavía no se ha decidido publicar.
+# Dominio propio: convocatorias.alvaroadrada.dev, vía CNAME en Porkbun a
+# adrada03.github.io. Una vez que GitHub verifique el DNS, añadir
+# convocatorias.alvaroadrada.dev como dominio personalizado en Settings >
+# Pages y marcar "Enforce HTTPS".
 
 name: Dashboard
 
@@ -93,11 +94,8 @@ jobs:
               sys.exit("El export salio vacio: no se publica un dashboard sin datos.")
           PY
 
-      # Para activar el dominio propio, descomentar. El DNS tiene que apuntar
-      # convocatorias.alvaroadrada.dev por CNAME a <usuario>.github.io antes,
-      # o GitHub rechazará el dominio.
-      # - name: Dominio propio
-      #   run: cp CNAME.pendiente dashboard/CNAME
+      - name: Dominio propio
+        run: cp CNAME.pendiente dashboard/CNAME
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
